@@ -68,6 +68,7 @@ class HoGPeripheral:
         self.att_server = None
         self.gatt_db = None
         self._report_handle = None
+        self._sc2_report_handle = None
 
     def setup(self, local_name="Steam Controller 2026"):
         """Set up GATT database and advertisement."""
@@ -81,13 +82,23 @@ class HoGPeripheral:
         print(f"[+] Report characteristic handle: 0x{self._report_handle:04x}" if self._report_handle
               else "[-] WARNING: Report characteristic not found")
 
+        # Find the SC2 custom characteristic handle for input notifications
+        self._find_sc2_report_handle()
+        print(f"[+] SC2 Custom Report characteristic handle: 0x{self._sc2_report_handle:04x}" if self._sc2_report_handle
+              else "[-] WARNING: SC2 Custom Report characteristic not found")
+
         # Create advertisement object
         adv_path = "/com/steamdeck/sc2/adv0"
+        from gatt_db import SC2_HID_SERVICE_UUID
         self.adv = LEAdvertisement(
             self.bus, adv_path, local_name,
-            service_uuids=["1812"],
+            service_uuids=["1812", SC2_HID_SERVICE_UUID],
             appearance=0x03C4,
         )
+
+        # Set up Feature Report callbacks
+        self._neptune_feature_fd = None
+        self._setup_feature_report_callbacks()
         print(f"[+] Advertisement object created at {adv_path}")
 
         # Create raw ATT server
@@ -116,6 +127,109 @@ class HoGPeripheral:
                         self._report_handle = val_handle
                         return
 
+    def _find_sc2_report_handle(self):
+        """Find the handle of the SC2 custom characteristic for input notifications."""
+        from gatt_db import SC2_INPUT_CH1_UUID, uuid_to_bytes
+        sc2_uuid_bytes = uuid_to_bytes(SC2_INPUT_CH1_UUID)
+        for handle, attr in self.gatt_db.attributes.items():
+            if attr.uuid == sc2_uuid_bytes:
+                if attr.properties & 0x10:
+                    self._sc2_report_handle = handle
+                    return
+        # Fallback: look for the characteristic declaration
+        for handle, attr in self.gatt_db.attributes.items():
+            if attr.uuid == b'\x03\x28':  # Characteristic declaration UUID
+                if len(attr.value) >= 19:
+                    char_uuid = attr.value[3:]
+                    props = attr.value[0]
+                    if char_uuid == sc2_uuid_bytes and props & 0x10:
+                        val_handle = attr.value[1] | (attr.value[2] << 8)
+                        self._sc2_report_handle = val_handle
+                        return
+
+    def _find_report_char_handle(self, report_id, report_type):
+        """Find the value handle of a CHR_REPORT with specific Report ID and Report Type."""
+        for handle, attr in self.gatt_db.attributes.items():
+            # Report characteristic UUID is 0x2A4D
+            if attr.uuid == b'\x4d\x2a':
+                # Find its descriptors
+                for desc_handle in range(handle + 1, handle + 5):
+                    desc = self.gatt_db.lookup(desc_handle)
+                    if desc and desc.uuid == b'\x08\x29':  # Report Reference UUID
+                        if len(desc.value) >= 2 and desc.value[0] == report_id and desc.value[1] == report_type:
+                            return handle
+        return None
+
+    def _setup_feature_report_callbacks(self):
+        """Register callbacks for Feature Reports (Report IDs 0x00, 0x01, 0x85, 0x86, 0x87)."""
+        feature_report_ids = [0x00, 0x01, 0x85, 0x86, 0x87]
+        for report_id in feature_report_ids:
+            handle = self._find_report_char_handle(report_id, 0x03)  # 0x03 = Feature Report
+            if handle:
+                print(f"[+] Registering Feature Report ID 0x{report_id:02x} callback on handle 0x{handle:04x}")
+                self.gatt_db.read_callbacks[handle] = lambda r_id=report_id: self._on_feature_report_read(r_id)
+                self.gatt_db.write_callbacks[handle] = lambda value, r_id=report_id: self._on_feature_report_write(r_id, value)
+
+    def _on_feature_report_read(self, report_id):
+        """Called when the host reads a Feature Report from the GATT database."""
+        if not self._neptune_feature_fd:
+            dev_path = None
+            if self.input_handler and self.input_handler._is_neptune:
+                dev_path = self.input_handler.device_path
+            if not dev_path:
+                from input_handler import find_neptune_hidraw
+                dev_path = find_neptune_hidraw()
+            if dev_path:
+                try:
+                    import os
+                    self._neptune_feature_fd = os.open(dev_path, os.O_RDWR)
+                    print(f"[+] Neptune feature report proxy fd opened: {dev_path}")
+                except Exception as e:
+                    print(f"[-] Failed to open Neptune feature report proxy: {e}")
+
+        if self._neptune_feature_fd:
+            import fcntl, array
+            length = 65
+            ioctl_num = (3 << 30) | (length << 16) | (72 << 8) | 7
+            buf = array.array('B', [0] * length)
+            buf[0] = report_id
+            try:
+                fcntl.ioctl(self._neptune_feature_fd, ioctl_num, buf, True)
+                print(f"[att] Proxy Feature Report 0x{report_id:02x} read success, payload: {buf[1:10].tolist()}")
+                return bytes(buf[1:])
+            except Exception as e:
+                print(f"[-] Proxy Feature Report 0x{report_id:02x} read error: {e}")
+
+        return b'\x00' * 64
+
+    def _on_feature_report_write(self, report_id, value):
+        """Called when the host writes a Feature Report to the GATT database."""
+        if not self._neptune_feature_fd:
+            dev_path = None
+            if self.input_handler and self.input_handler._is_neptune:
+                dev_path = self.input_handler.device_path
+            if not dev_path:
+                from input_handler import find_neptune_hidraw
+                dev_path = find_neptune_hidraw()
+            if dev_path:
+                try:
+                    import os
+                    self._neptune_feature_fd = os.open(dev_path, os.O_RDWR)
+                    print(f"[+] Neptune feature report proxy fd opened: {dev_path}")
+                except Exception as e:
+                    print(f"[-] Failed to open Neptune feature report proxy: {e}")
+
+        if self._neptune_feature_fd:
+            try:
+                import fcntl, array
+                length = len(value) + 1
+                ioctl_num = (3 << 30) | (length << 16) | (72 << 8) | 6
+                buf = array.array('B', [report_id] + list(value))
+                fcntl.ioctl(self._neptune_feature_fd, ioctl_num, buf, True)
+                print(f"[att] Proxy Feature Report 0x{report_id:02x} write success, len={len(value)}")
+            except Exception as e:
+                print(f"[-] Proxy Feature Report 0x{report_id:02x} write error: {e}")
+
     def _on_att_connection(self, addr):
         print(f"[+] ATT connection established from {addr}")
 
@@ -141,6 +255,25 @@ class HoGPeripheral:
                         print(f"[+] Test {i}: LX=10000")
                     time.sleep(0.5)
                 print(f"[+] Test notifications complete")
+            threading.Thread(target=_send_periodic, daemon=True).start()
+
+        elif handle == self._sc2_report_handle and self.att_server:
+            import threading, time
+            def _send_periodic():
+                time.sleep(1)
+                for i in range(10):
+                    if not self.att_server.connected:
+                        break
+                    # Send custom 45-byte test report
+                    report = bytearray(45)
+                    report[0] = 0x45
+                    report[1] = i & 0xFF
+                    if i % 2 == 0:
+                        report[2] = 0x01  # Button A
+                    self.att_server.send_notification(self._sc2_report_handle, bytes(report))
+                    print(f"[+] Test {i}: SC2 custom CH1 notification sent")
+                    time.sleep(0.5)
+                print(f"[+] SC2 Custom test notifications complete")
             threading.Thread(target=_send_periodic, daemon=True).start()
 
     def _on_att_disconnection(self, addr):
@@ -209,10 +342,17 @@ class HoGPeripheral:
 
     def _on_input_report(self, report_bytes):
         """Called when a new SC2 input report is ready. Send as BLE notification."""
-        if self.att_server and self.att_server.connected and self._report_handle:
-            self.att_server.send_notification(self._report_handle, report_bytes)
-        else:
-            print(f"[input] Skipped: connected={self.att_server.connected if self.att_server else None} handle={self._report_handle}")
+        if self.att_server and self.att_server.connected:
+            if isinstance(report_bytes, tuple):
+                report_bytes_12, report_bytes_45 = report_bytes
+            else:
+                report_bytes_12 = report_bytes
+                report_bytes_45 = None
+
+            if self._report_handle:
+                self.att_server.send_notification(self._report_handle, report_bytes_12)
+            if report_bytes_45 and self._sc2_report_handle:
+                self.att_server.send_notification(self._sc2_report_handle, report_bytes_45)
 
     def run(self):
         """Run the main event loop."""
@@ -234,6 +374,15 @@ class HoGPeripheral:
 
     def cleanup(self):
         """Clean up resources."""
+        if hasattr(self, '_neptune_feature_fd') and self._neptune_feature_fd:
+            try:
+                import os
+                os.close(self._neptune_feature_fd)
+                print("[+] Neptune feature report proxy fd closed")
+            except OSError:
+                pass
+            self._neptune_feature_fd = None
+
         if self.att_server:
             self.att_server.stop()
 

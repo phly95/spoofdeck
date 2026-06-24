@@ -72,10 +72,20 @@ CHR_BATTERY_LEVEL = 0x2A19
 CHR_MANUFACTURER_NAME = 0x2A29
 CHR_MODEL_NUMBER = 0x2A24
 CHR_PNP_ID = 0x2A50
+CHR_SERIAL_NUMBER = 0x2A25
+CHR_FIRMWARE_REVISION = 0x2A26
+CHR_HARDWARE_REVISION = 0x2A27
+CHR_SOFTWARE_REVISION = 0x2A28
 
 # Descriptor UUIDs
 DESC_REPORT_REF = 0x2908
 DESC_CCCD = 0x2902
+
+# Custom Valve SC2 UUIDs
+SC2_HID_SERVICE_UUID = "100f6c32-1735-4313-b402-38567131e5f3"
+SC2_INPUT_CH1_UUID = "100f6c7a-1735-4313-b402-38567131e5f3"
+SC2_INPUT_CH2_UUID = "100f6c7c-1735-4313-b402-38567131e5f3"
+SC2_REPORT_CH_UUID = "100f6c34-1735-4313-b402-38567131e5f3"
 
 
 def uuid16_to_bytes(uuid16):
@@ -88,6 +98,17 @@ def uuid128_to_bytes(uuid128_str):
     import uuid
     u = uuid.UUID(uuid128_str)
     return u.bytes_le
+
+
+def uuid_to_bytes(uuid_val):
+    """Convert UUID (int, str, or bytes) to bytes (2 or 16)."""
+    if isinstance(uuid_val, int):
+        return struct.pack('<H', uuid_val)
+    elif isinstance(uuid_val, str):
+        return uuid128_to_bytes(uuid_val)
+    elif isinstance(uuid_val, bytes):
+        return uuid_val
+    raise ValueError(f"Invalid UUID: {uuid_val}")
 
 
 class Attribute:
@@ -116,32 +137,36 @@ class GattDatabase:
         self.attributes = {}  # handle -> Attribute
         self.services = []  # list of (start_handle, end_handle, uuid)
         self._next_handle = 1
+        self.read_callbacks = {}   # handle -> callable returning bytes
+        self.write_callbacks = {}  # handle -> callable accepting bytes
 
     def _alloc_handle(self):
         h = self._next_handle
         self._next_handle += 1
         return h
 
-    def add_service(self, svc_uuid_16, char_defs):
+    def add_service(self, svc_uuid, char_defs):
         """
         Add a GATT service with characteristics.
 
         Args:
-            svc_uuid_16: Service UUID (16-bit)
-            char_defs: List of (uuid_16, properties, value, [desc_defs])
-                where desc_defs is [(desc_uuid_16, desc_value)]
+            svc_uuid: Service UUID (16-bit int or 128-bit str/bytes)
+            char_defs: List of (uuid, properties, value, [desc_defs])
+                where desc_defs is [(desc_uuid, desc_value)]
         """
+        svc_uuid_bytes = uuid_to_bytes(svc_uuid)
+        
         # Service declaration handle
         svc_handle = self._alloc_handle()
-        svc_value = struct.pack('<H', svc_uuid_16)
         self.attributes[svc_handle] = Attribute(
-            svc_handle, uuid16_to_bytes(GATT_PRIM_SVC_UUID), svc_value
+            svc_handle, uuid16_to_bytes(GATT_PRIM_SVC_UUID), svc_uuid_bytes
         )
 
         start_handle = svc_handle
 
-        for uuid_16, properties, value, *rest in char_defs:
+        for char_uuid, properties, value, *rest in char_defs:
             desc_defs = rest[0] if rest else []
+            char_uuid_bytes = uuid_to_bytes(char_uuid)
 
             # Characteristic declaration handle
             decl_handle = self._alloc_handle()
@@ -149,10 +174,10 @@ class GattDatabase:
             value_handle = self._alloc_handle()
 
             # Build characteristic declaration value:
-            # properties(1) + value_handle(2) + uuid(2)
+            # properties(1) + value_handle(2) + uuid (2 or 16)
             decl_value = struct.pack('<BB', properties, value_handle & 0xFF)
             decl_value += struct.pack('<B', (value_handle >> 8) & 0xFF)
-            decl_value += uuid16_to_bytes(uuid_16)
+            decl_value += char_uuid_bytes
 
             self.attributes[decl_handle] = Attribute(
                 decl_handle, uuid16_to_bytes(GATT_CHARAC_UUID), decl_value
@@ -160,19 +185,20 @@ class GattDatabase:
 
             # Characteristic value handle
             self.attributes[value_handle] = Attribute(
-                value_handle, uuid16_to_bytes(uuid_16), value, properties
+                value_handle, char_uuid_bytes, value, properties
             )
 
             # Descriptors
             for desc_uuid, desc_value in desc_defs:
                 desc_handle = self._alloc_handle()
+                desc_uuid_bytes = uuid_to_bytes(desc_uuid)
                 self.attributes[desc_handle] = Attribute(
-                    desc_handle, uuid16_to_bytes(desc_uuid), desc_value,
+                    desc_handle, desc_uuid_bytes, desc_value,
                     properties=ATT_PROP_READ | ATT_PROP_WRITE
                 )
 
         end_handle = self._next_handle - 1
-        self.services.append((start_handle, end_handle, svc_uuid_16))
+        self.services.append((start_handle, end_handle, svc_uuid_bytes))
 
     def lookup(self, handle):
         """Look up attribute by handle."""
@@ -180,6 +206,11 @@ class GattDatabase:
 
     def read_attribute(self, handle):
         """Read attribute value. Returns bytes or None."""
+        if handle in self.read_callbacks:
+            try:
+                return self.read_callbacks[handle]()
+            except Exception as e:
+                print(f"[-] Read callback error for handle 0x{handle:04x}: {e}")
         attr = self.attributes.get(handle)
         if attr:
             return attr.value
@@ -187,6 +218,11 @@ class GattDatabase:
 
     def write_attribute(self, handle, value):
         """Write attribute value. Returns True on success."""
+        if handle in self.write_callbacks:
+            try:
+                self.write_callbacks[handle](value)
+            except Exception as e:
+                print(f"[-] Write callback error for handle 0x{handle:04x}: {e}")
         attr = self.attributes.get(handle)
         if attr:
             attr.value = value
@@ -228,11 +264,11 @@ class GattDatabase:
                 continue
             attr = self.attributes[handle]
             if attr.uuid == uuid16_to_bytes(GATT_CHARAC_UUID):
-                # Parse declaration: properties(1) + value_handle(2) + uuid(2)
+                # Parse declaration: properties(1) + value_handle(2) + uuid
                 if len(attr.value) >= 5:
                     props = attr.value[0]
                     val_handle = attr.value[1] | (attr.value[2] << 8)
-                    char_uuid = attr.value[3:5]
+                    char_uuid = attr.value[3:]
                     results.append((handle, val_handle, props, char_uuid))
         return results
 
@@ -301,8 +337,8 @@ def build_sc2_database(device_name="Steam Controller 2026"):
     # HID Information: bcdHID=1.11, bCountryCode=0, Flags=0x02 (normally connectable)
     hid_info = bytes([0x11, 0x01, 0x00, 0x02])
 
-    # PnP ID: VID source=BT SIG, VID=0x28DE, PID=0x0003, version=1.0
-    pnp_id = bytes([0x01, 0xDE, 0x28, 0x03, 0x03, 0x00, 0x01, 0x00])
+    # PnP ID: VID source=BT SIG, VID=0x28DE, PID=0x1303, version=1.0
+    pnp_id = bytes([0x01, 0xDE, 0x28, 0x03, 0x13, 0x00, 0x01])
 
     # GAP Service (0x1800)
     db.add_service(SVC_GAP, [
@@ -329,6 +365,33 @@ def build_sc2_database(device_name="Steam Controller 2026"):
         (CHR_REPORT, ATT_PROP_READ | ATT_PROP_WRITE_NO_RSP, b'\x00', [
             (DESC_REPORT_REF, bytes([0x02, 0x02])),  # Report ID 2, Output
         ]),
+        # Feature Reports (Report IDs 0x00, 0x01, 0x85, 0x86, 0x87)
+        (CHR_REPORT, ATT_PROP_READ | ATT_PROP_WRITE, b'\x00' * 64, [
+            (DESC_REPORT_REF, bytes([0x00, 0x03])),  # Report ID 0x00, Feature
+        ]),
+        (CHR_REPORT, ATT_PROP_READ | ATT_PROP_WRITE, b'\x00' * 64, [
+            (DESC_REPORT_REF, bytes([0x01, 0x03])),  # Report ID 0x01, Feature
+        ]),
+        (CHR_REPORT, ATT_PROP_READ | ATT_PROP_WRITE, b'\x00' * 64, [
+            (DESC_REPORT_REF, bytes([0x85, 0x03])),  # Report ID 0x85, Feature
+        ]),
+        (CHR_REPORT, ATT_PROP_READ | ATT_PROP_WRITE, b'\x00' * 64, [
+            (DESC_REPORT_REF, bytes([0x86, 0x03])),  # Report ID 0x86, Feature
+        ]),
+        (CHR_REPORT, ATT_PROP_READ | ATT_PROP_WRITE, b'\x00' * 64, [
+            (DESC_REPORT_REF, bytes([0x87, 0x03])),  # Report ID 0x87, Feature
+        ]),
+    ])
+
+    # Valve Custom HID Service
+    db.add_service(SC2_HID_SERVICE_UUID, [
+        (SC2_INPUT_CH1_UUID, ATT_PROP_READ | ATT_PROP_NOTIFY, b'\x00' * 45, [
+            (DESC_CCCD, b'\x00\x00'),
+        ]),
+        (SC2_INPUT_CH2_UUID, ATT_PROP_READ | ATT_PROP_NOTIFY, b'\x00' * 47, [
+            (DESC_CCCD, b'\x00\x00'),
+        ]),
+        (SC2_REPORT_CH_UUID, ATT_PROP_READ | ATT_PROP_WRITE | ATT_PROP_WRITE_NO_RSP, b'\x00' * 64),
     ])
 
     # Battery Service (0x180F)
@@ -342,6 +405,10 @@ def build_sc2_database(device_name="Steam Controller 2026"):
     db.add_service(SVC_DEVICE_INFO, [
         (CHR_MANUFACTURER_NAME, ATT_PROP_READ, b'Valve Software'),
         (CHR_MODEL_NUMBER, ATT_PROP_READ, b'Steam Controller 2026'),
+        (CHR_SERIAL_NUMBER, ATT_PROP_READ, b'123456789ABCDEF'),
+        (CHR_FIRMWARE_REVISION, ATT_PROP_READ, b'1.0.0'),
+        (CHR_HARDWARE_REVISION, ATT_PROP_READ, b'1.0.0'),
+        (CHR_SOFTWARE_REVISION, ATT_PROP_READ, b'1.0.0'),
         (CHR_PNP_ID, ATT_PROP_READ, pnp_id),
     ])
 

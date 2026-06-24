@@ -70,6 +70,7 @@ class AttServer:
         self._running = False
         self._thread = None
         self._notification_handles = set()  # CCCD-enabled handles
+        self.notification_count = 0
         self._on_connection = None
         self._on_disconnection = None
         self._on_cccd_enabled = None
@@ -212,14 +213,19 @@ class AttServer:
 
         print(f"[att] Found {len(services)} services")
         # Build response: each service is handle(2) + end_handle(2) + uuid(2)
+        # Build response: each service is handle(2) + end_handle(2) + uuid
+        # Note: all returned services in a single RSP must be of the same length.
+        first_svc_uuid_len = len(services[0][2])
         attr_list = b''
         for svc_start, svc_end, svc_uuid in services:
-            entry = struct.pack('<HH', svc_start, svc_end) + uuid16_to_bytes(svc_uuid)
-            print(f"  Service: start=0x{svc_start:04x} end=0x{svc_end:04x} uuid=0x{svc_uuid:04x}")
+            if len(svc_uuid) != first_svc_uuid_len:
+                break
+            entry = struct.pack('<HH', svc_start, svc_end) + svc_uuid
+            print(f"  Service: start=0x{svc_start:04x} end=0x{svc_end:04x} uuid={svc_uuid.hex()}")
             attr_list += entry
 
         # Response format: opcode(1) + length(1) + data
-        length = 6  # 4 bytes handles + 2 bytes UUID per entry
+        length = 4 + first_svc_uuid_len  # 4 bytes handles + UUID length
         resp = struct.pack('<BB', ATT_OP_READ_BY_GROUP_TYPE_RSP, length) + attr_list
         print(f"[att] Sending ReadByGroupType response: {resp.hex()}")
         self._send(resp)
@@ -247,15 +253,19 @@ class AttServer:
             return
 
         print(f"[att] Found {len(chars)} characteristics")
-        # Build response: each char is decl_handle(2) + properties(1) + value_handle(2) + uuid(2)
+        # Build response: each char is decl_handle(2) + properties(1) + value_handle(2) + uuid
+        # Note: all returned characteristics in a single RSP must be of the same length.
+        first_char_uuid_len = len(chars[0][3])
         attr_list = b''
         for decl_handle, val_handle, props, char_uuid in chars:
+            if len(char_uuid) != first_char_uuid_len:
+                break
             entry = struct.pack('<H', decl_handle) + struct.pack('B', props) + struct.pack('<H', val_handle) + char_uuid
             print(f"  Char: decl=0x{decl_handle:04x} val=0x{val_handle:04x} props=0x{props:02x} uuid={char_uuid.hex()}")
             attr_list += entry
 
         # Response format: opcode(1) + length(1) + data
-        length = 7  # 2+1+2+2 per entry
+        length = 5 + first_char_uuid_len  # 2+1+2 + UUID length
         resp = struct.pack('<BB', ATT_OP_READ_BY_TYPE_RSP, length) + attr_list
         print(f"[att] Sending ReadByType response: {resp.hex()}")
         self._send(resp)
@@ -272,18 +282,19 @@ class AttServer:
             self._send_error(opcode, start_handle, ATT_ERR_ATTR_NOT_FOUND)
             return
 
-        # Build response
-        # Format 1 (UUID 16-bit): handle(2) + uuid(2) per entry
+        # Build response: must only contain UUIDs of the same length in a single response
+        first_uuid_len = len(descriptors[0][1])
         attr_list = b''
         for handle, uuid in descriptors:
-            if len(uuid) == 2:
-                attr_list += struct.pack('<H', handle) + uuid
-            else:
-                attr_list += struct.pack('<H', handle) + uuid
+            if len(uuid) != first_uuid_len:
+                break
+            attr_list += struct.pack('<H', handle) + uuid
 
         # Response format: opcode(1) + format(1) + data
-        fmt = 0x01  # UUID 16-bit format
+        # format: 0x01 for 16-bit UUIDs, 0x02 for 128-bit UUIDs
+        fmt = 0x01 if first_uuid_len == 2 else 0x02
         resp = struct.pack('<BB', ATT_OP_FIND_INFO_RSP, fmt) + attr_list
+        print(f"[att] FindInfo: sending response fmt={fmt} len={len(resp)}")
         self._send(resp)
 
     def _handle_read(self, data):
@@ -375,6 +386,7 @@ class AttServer:
 
         attr = self.db.lookup(handle)
         if attr:
+            print(f"[att] Write Cmd: handle=0x{handle:04x} uuid={attr.uuid.hex()} len={len(value)} data={value.hex()}")
             self.db.write_attribute(handle, value)
 
     def _send_error(self, request_opcode, handle, error_code):
@@ -406,7 +418,9 @@ class AttServer:
 
         pdu = struct.pack('<BH', ATT_OP_HANDLE_NFY, handle) + value
         sent = self._send(pdu)
-        print(f"[att] Notification sent: handle=0x{handle:04x} len={len(value)} pdu_len={sent} data={value[:8].hex()}...")
+        self.notification_count += 1
+        if self.notification_count % 100 == 0:
+            print(f"[att] Notification sent (throttled): handle=0x{handle:04x} len={len(value)} count={self.notification_count}")
 
     @property
     def connected(self):

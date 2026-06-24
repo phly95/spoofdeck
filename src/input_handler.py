@@ -43,9 +43,11 @@ ABS_HAT0X = 16
 ABS_HAT0Y = 17
 
 NEPTUNE_LIZARD_OFF_CMDS = [
-    b'\x01\x00\x81' + b'\x00' * 61,
-    b'\x01\x00\x87\x03\x08\x07\x00' + b'\x00' * 57,
-    b'\x01\x00\x87\x03\x15\x00\x00' + b'\x00' * 57,
+    b'\x01\x00\x81' + b'\x00' * 61,                  # ClearDigitalMappings
+    b'\x01\x00\x87\x03\x08\x07\x00' + b'\x00' * 57,  # RPadMode -> TrackpadMode.None (0x07)
+    b'\x01\x00\x87\x03\x07\x07\x00' + b'\x00' * 57,  # LPadMode -> TrackpadMode.None (0x07)
+    b'\x01\x00\x87\x03\x18\x00\x00' + b'\x00' * 57,  # SmoothAbsoluteMouse -> 0
+    b'\x01\x00\x87\x03\x15\x00\x00' + b'\x00' * 57,  # SensitivityScaleAmount -> 0
 ]
 
 
@@ -104,49 +106,6 @@ def _send_lizard_off(fd):
             pass
 
 
-def _parse_neptune_report(raw):
-    if len(raw) < 64 or raw[2] != 0x09:
-        return None
-    report = SC2InputReport()
-
-    btn8 = raw[8]
-    btn9 = raw[9]
-    btn10 = raw[10]
-    btn11 = raw[11]
-    btn13 = raw[13]
-    btn14 = raw[14]
-
-    b = 0
-    if btn8 & 0x01: b |= 0x0001
-    if btn8 & 0x04: b |= 0x0002
-    if btn8 & 0x02: b |= 0x0004
-    if btn8 & 0x08: b |= 0x0008
-    if btn8 & 0x10: b |= 0x0010
-    if btn8 & 0x20: b |= 0x0020
-    if btn9 & 0x02: b |= 0x0040
-    if btn9 & 0x08: b |= 0x0080
-    if btn9 & 0x04: b |= 0x0100
-    if btn10 & 0x02: b |= 0x0200
-    if btn11 & 0x20: b |= 0x0400
-    if btn9 & 0x80: b |= 0x0800
-    if btn9 & 0x10: b |= 0x1000
-    if btn9 & 0x20: b |= 0x2000
-    if btn9 & 0x40: b |= 0x4000
-    report.buttons = b
-
-    report.lx = struct.unpack_from('<h', raw, 48)[0]
-    report.ly = struct.unpack_from('<h', raw, 50)[0]
-    report.rx = struct.unpack_from('<h', raw, 52)[0]
-    report.ry = struct.unpack_from('<h', raw, 54)[0]
-
-    lt = struct.unpack_from('<H', raw, 44)[0]
-    rt = struct.unpack_from('<H', raw, 46)[0]
-    report.left_trigger = min(255, lt >> 7)
-    report.right_trigger = min(255, rt >> 7)
-
-    return report.to_bytes()
-
-
 class InputHandler:
     def __init__(self, on_report=None, device_path=None):
         self.on_report = on_report
@@ -159,6 +118,146 @@ class InputHandler:
         self._is_neptune = False
         self._neptune_fd = None
         self.report = SC2InputReport()
+        self.seq_num = 0
+        self.start_time = time.monotonic()
+
+    def _parse_neptune_report(self, raw):
+        if len(raw) < 64 or raw[2] != 0x09:
+            return None
+        report = SC2InputReport()
+
+        self.seq_num = (self.seq_num + 1) & 0xFF
+        timestamp_us = int((time.monotonic() - self.start_time) * 1000000) & 0xFFFFFFFF
+
+        btn8 = raw[8]
+        btn9 = raw[9]
+        btn10 = raw[10]
+        btn11 = raw[11]
+        btn13 = raw[13]
+
+        b = 0
+        # Byte 8:
+        # a (bit 7/0x80) -> BTN_SOUTH (0x0001)
+        if btn8 & 0x80: b |= 0x0001
+        # b (bit 5/0x20) -> BTN_EAST (0x0002)
+        if btn8 & 0x20: b |= 0x0002
+        # x (bit 6/0x40) -> BTN_NORTH (0x0004)
+        if btn8 & 0x40: b |= 0x0004
+        # y (bit 4/0x10) -> BTN_WEST (0x0008)
+        if btn8 & 0x10: b |= 0x0008
+        # l1 (bit 3/0x08) -> BTN_TL (0x0010)
+        if btn8 & 0x08: b |= 0x0010
+        # r1 (bit 2/0x04) -> BTN_TR (0x0020)
+        if btn8 & 0x04: b |= 0x0020
+
+        # Byte 9:
+        # options (bit 4/0x10) -> BTN_SELECT (0x0040)
+        if btn9 & 0x10: b |= 0x0040
+        # menu (bit 6/0x40) -> BTN_START (0x0080)
+        if btn9 & 0x40: b |= 0x0080
+        # steam (bit 5/0x20) -> BTN_MODE (0x0100)
+        if btn9 & 0x20: b |= 0x0100
+
+        # Byte 10:
+        # l3 (bit 6/0x40) -> BTN_THUMBL (0x0200)
+        if btn10 & 0x40: b |= 0x0200
+
+        # Byte 11:
+        # r3 (bit 2/0x04) -> BTN_THUMBR (0x0400)
+        if btn11 & 0x04: b |= 0x0400
+
+        # D-pad (Byte 9):
+        # up (bit 0/0x01) -> DPAD_UP (0x0800)
+        if btn9 & 0x01: b |= 0x0800
+        # down (bit 3/0x08) -> DPAD_DOWN (0x1000)
+        if btn9 & 0x08: b |= 0x1000
+        # left (bit 2/0x04) -> DPAD_LEFT (0x2000)
+        if btn9 & 0x04: b |= 0x2000
+        # right (bit 1/0x02) -> DPAD_RIGHT (0x4000)
+        if btn9 & 0x02: b |= 0x4000
+
+        # Back grips: L4 (byte 13 bit 1/0x02), L5 (byte 9 bit 7/0x80), R4 (byte 13 bit 2/0x04), R5 (byte 10 bit 0/0x01)
+        if (btn13 & 0x02) or (btn9 & 0x80) or (btn13 & 0x04) or (btn10 & 0x01):
+            b |= 0x8000
+
+        report.buttons = b
+
+        lx = struct.unpack_from('<h', raw, 48)[0]
+        ly = struct.unpack_from('<h', raw, 50)[0]
+        rx = struct.unpack_from('<h', raw, 52)[0]
+        ry = struct.unpack_from('<h', raw, 54)[0]
+
+        report.lx = lx
+        report.ly = ly
+        report.rx = rx
+        report.ry = ry
+
+        lt = struct.unpack_from('<H', raw, 44)[0]
+        rt = struct.unpack_from('<H', raw, 46)[0]
+        left_trigger = min(255, lt >> 7)
+        right_trigger = min(255, rt >> 7)
+        
+        report.left_trigger = left_trigger
+        report.right_trigger = right_trigger
+
+        # --- 45-byte SC2 BLE Custom Report (Report 0x45) ---
+        b32 = 0
+        if btn8 & 0x80: b32 |= (1 << 0)   # A
+        if btn8 & 0x20: b32 |= (1 << 1)   # B
+        if btn8 & 0x40: b32 |= (1 << 2)   # X
+        if btn8 & 0x10: b32 |= (1 << 3)   # Y
+        if btn8 & 0x08: b32 |= (1 << 4)   # L1
+        if btn8 & 0x04: b32 |= (1 << 5)   # R1
+        if (btn13 & 0x02) or (btn9 & 0x80): b32 |= (1 << 6)  # Left Grip
+        if (btn13 & 0x04) or (btn10 & 0x01): b32 |= (1 << 7) # Right Grip
+        if btn9 & 0x10: b32 |= (1 << 8)   # Start / Options
+        if btn9 & 0x20: b32 |= (1 << 9)   # Steam
+        if btn10 & 0x02: b32 |= (1 << 10)  # LPad Click
+        if btn10 & 0x04: b32 |= (1 << 11)  # RPad Click
+        if btn10 & 0x40: b32 |= (1 << 12)  # L3
+        if btn11 & 0x04: b32 |= (1 << 13)  # R3
+        if btn9 & 0x01: b32 |= (1 << 14)   # Dpad Up
+        if btn9 & 0x08: b32 |= (1 << 15)   # Dpad Down
+        if btn9 & 0x04: b32 |= (1 << 16)   # Dpad Left
+        if btn9 & 0x02: b32 |= (1 << 17)   # Dpad Right
+        if btn10 & 0x08: b32 |= (1 << 22)  # LPad Touch
+        if btn10 & 0x10: b32 |= (1 << 23)  # RPad Touch
+
+        lpad_x = struct.unpack_from('<h', raw, 16)[0]
+        lpad_y = struct.unpack_from('<h', raw, 18)[0]
+        rpad_x = struct.unpack_from('<h', raw, 20)[0]
+        rpad_y = struct.unpack_from('<h', raw, 22)[0]
+
+        accel_x = struct.unpack_from('<h', raw, 24)[0]
+        accel_y = struct.unpack_from('<h', raw, 26)[0]
+        accel_z = struct.unpack_from('<h', raw, 28)[0]
+        gyro_x = struct.unpack_from('<h', raw, 30)[0]
+        gyro_y = struct.unpack_from('<h', raw, 32)[0]
+        gyro_z = struct.unpack_from('<h', raw, 34)[0]
+
+        report45 = bytearray(45)
+        report45[0] = 0x45
+        report45[1] = self.seq_num
+        struct.pack_into("<I", report45, 2, b32)
+        report45[6] = left_trigger
+        report45[7] = right_trigger
+        struct.pack_into("<h", report45, 8, lx)
+        struct.pack_into("<h", report45, 10, ly)
+        struct.pack_into("<h", report45, 12, rx)
+        struct.pack_into("<h", report45, 14, ry)
+        struct.pack_into("<h", report45, 16, lpad_x)
+        struct.pack_into("<h", report45, 18, lpad_y)
+        struct.pack_into("<h", report45, 20, rpad_x)
+        struct.pack_into("<h", report45, 22, rpad_y)
+        struct.pack_into("<h", report45, 24, accel_x)
+        struct.pack_into("<h", report45, 26, accel_y)
+        struct.pack_into("<h", report45, 28, accel_z)
+        struct.pack_into("<h", report45, 30, gyro_x)
+        struct.pack_into("<h", report45, 32, gyro_y)
+        struct.pack_into("<h", report45, 34, gyro_z)
+        struct.pack_into("<I", report45, 36, timestamp_us)
+
+        return (report.to_bytes(), bytes(report45))
 
     def find_xbox_device(self):
         if not HAS_EVDEV:
@@ -267,10 +366,11 @@ class InputHandler:
                     except BlockingIOError:
                         continue
                     if len(raw) == 64:
-                        report_bytes = _parse_neptune_report(raw)
-                        if report_bytes and self.on_report:
-                            self.on_report(report_bytes)
-                            print(f"[input] Report sent: {report_bytes.hex()}")
+                        reports = self._parse_neptune_report(raw)
+                        if reports and self.on_report:
+                            self.on_report(reports)
+                            if self.seq_num % 100 == 0:
+                                print(f"[input] Neptune reports forwarded (throttled): 12b={reports[0].hex()[:8]}... 45b={reports[1].hex()[:8]}...")
         except Exception as e:
             if self._running:
                 print(f"[-] Neptune read error: {type(e).__name__}: {e}")
