@@ -120,6 +120,14 @@ class InputHandler:
         self.report = SC2InputReport()
         self.seq_num = 0
         self.start_time = time.monotonic()
+        
+        # State tracking for Mouse and Keyboard emulation (Lizard mode)
+        self.prev_rpad_x = None
+        self.prev_rpad_y = None
+        self.prev_lpad_x = None
+        self.prev_lpad_y = None
+        self.last_mouse_buttons = 0
+        self.last_kbd_report = b'\x00' * 8
 
     def _parse_neptune_report(self, raw):
         if len(raw) < 64 or raw[2] != 0x09:
@@ -257,7 +265,95 @@ class InputHandler:
         struct.pack_into("<h", report45, 34, gyro_z)
         struct.pack_into("<I", report45, 36, timestamp_us)
 
-        return (report.to_bytes(), bytes(report45))
+        # --- Lizard Mode Mouse Emulation ---
+        rpad_touch = bool(btn10 & 0x10)
+        lpad_touch = bool(btn10 & 0x08)
+
+        dx_mouse = 0
+        dy_mouse = 0
+        if rpad_touch:
+            if self.prev_rpad_x is None or self.prev_rpad_y is None:
+                self.prev_rpad_x = rpad_x
+                self.prev_rpad_y = rpad_y
+            else:
+                dx = rpad_x - self.prev_rpad_x
+                dy = self.prev_rpad_y - rpad_y
+                dx_mouse = int(dx / 150)
+                dy_mouse = int(dy / 150)
+                self.prev_rpad_x = rpad_x
+                self.prev_rpad_y = rpad_y
+        else:
+            self.prev_rpad_x = None
+            self.prev_rpad_y = None
+
+        scroll_y = 0
+        if lpad_touch:
+            if self.prev_lpad_x is None or self.prev_lpad_y is None:
+                self.prev_lpad_x = lpad_x
+                self.prev_lpad_y = lpad_y
+            else:
+                scroll_dy = lpad_y - self.prev_lpad_y
+                scroll_y = int(scroll_dy / 300)
+                self.prev_lpad_x = lpad_x
+                self.prev_lpad_y = lpad_y
+        else:
+            self.prev_lpad_x = None
+            self.prev_lpad_y = None
+
+        # Clamp mouse coordinates to signed 8-bit
+        dx_mouse = max(-127, min(127, dx_mouse))
+        dy_mouse = max(-127, min(127, dy_mouse))
+        scroll_y = max(-127, min(127, scroll_y))
+
+        # Mouse button states
+        mouse_buttons = 0
+        if (btn10 & 0x04) or (rt > 10000):  # RPadPress or Right Trigger -> Left Click
+            mouse_buttons |= 0x01
+        if (btn10 & 0x02) or (lt > 10000):  # LPadPress or Left Trigger -> Right Click
+            mouse_buttons |= 0x02
+        if (btn10 & 0x40):  # L3 -> Middle Click
+            mouse_buttons |= 0x04
+
+        # Verify mouse changes
+        mouse_report = None
+        if (mouse_buttons != self.last_mouse_buttons) or (dx_mouse != 0) or (dy_mouse != 0) or (scroll_y != 0):
+            mouse_report = struct.pack('<Bbbb', mouse_buttons, dx_mouse, dy_mouse, scroll_y)
+            self.last_mouse_buttons = mouse_buttons
+
+        # --- Lizard Mode Keyboard Emulation ---
+        active_keys = []
+        if btn9 & 0x01: active_keys.append(0x52)  # Dpad Up -> Up Arrow
+        if btn9 & 0x08: active_keys.append(0x51)  # Dpad Down -> Down Arrow
+        if btn9 & 0x04: active_keys.append(0x50)  # Dpad Left -> Left Arrow
+        if btn9 & 0x02: active_keys.append(0x4F)  # Dpad Right -> Right Arrow
+        if btn8 & 0x80: active_keys.append(0x28)  # A -> Return
+        if btn8 & 0x20: active_keys.append(0x29)  # B -> Escape
+        if btn8 & 0x40: active_keys.append(0x2C)  # X -> Spacebar
+        if btn8 & 0x10: active_keys.append(0x2B)  # Y -> Tab
+        if btn9 & 0x10: active_keys.append(0x2B)  # Options -> Tab
+        if btn9 & 0x40: active_keys.append(0x29)  # Menu -> Esc
+
+        active_keys = active_keys[:6]
+        while len(active_keys) < 6:
+            active_keys.append(0)
+
+        modifiers = 0
+        if btn8 & 0x08: modifiers |= 0x01  # L1 -> Left Control
+        if btn8 & 0x04: modifiers |= 0x02  # R1 -> Left Shift
+        if btn9 & 0x20: modifiers |= 0x08  # Steam button -> Left GUI (Super/Win)
+
+        kbd_report_candidate = struct.pack('<BB6B', modifiers, 0, *active_keys)
+        kbd_report = None
+        if kbd_report_candidate != self.last_kbd_report:
+            kbd_report = kbd_report_candidate
+            self.last_kbd_report = kbd_report_candidate
+
+        return {
+            'gamepad_12b': report.to_bytes(),
+            'gamepad_45b': bytes(report45),
+            'mouse_4b': mouse_report,
+            'kbd_8b': kbd_report
+        }
 
     def find_xbox_device(self):
         if not HAS_EVDEV:
@@ -370,7 +466,10 @@ class InputHandler:
                         if reports and self.on_report:
                             self.on_report(reports)
                             if self.seq_num % 100 == 0:
-                                print(f"[input] Neptune reports forwarded (throttled): 12b={reports[0].hex()[:8]}... 45b={reports[1].hex()[:8]}...")
+                                g12 = reports.get('gamepad_12b', b'')
+                                m4 = reports.get('mouse_4b')
+                                m4_hex = m4.hex() if m4 else 'None'
+                                print(f"[input] Neptune reports forwarded (throttled): 12b={g12.hex()[:8]}... mouse_4b={m4_hex}")
         except Exception as e:
             if self._running:
                 print(f"[-] Neptune read error: {type(e).__name__}: {e}")
@@ -443,7 +542,13 @@ class InputHandler:
     def _send_if_needed(self):
         if self._dirty and self.on_report:
             report = self.report.to_bytes()
-            self.on_report(report)
+            report_dict = {
+                'gamepad_12b': report,
+                'gamepad_45b': None,
+                'mouse_4b': None,
+                'kbd_8b': None
+            }
+            self.on_report(report_dict)
             self._dirty = False
             print(f"[input] Report sent: {report.hex()}")
 

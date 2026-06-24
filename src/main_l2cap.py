@@ -68,7 +68,10 @@ class HoGPeripheral:
         self.att_server = None
         self.gatt_db = None
         self._report_handle = None
+        self._mouse_report_handle = None
+        self._keyboard_report_handle = None
         self._sc2_report_handle = None
+        self.steam_input_mode = False
 
     def setup(self, local_name="Steam Controller 2026"):
         """Set up GATT database and advertisement."""
@@ -77,10 +80,13 @@ class HoGPeripheral:
         print(f"[+] GATT database built: {len(self.gatt_db.attributes)} attributes, "
               f"{len(self.gatt_db.services)} services")
 
-        # Find the Report characteristic handle for input notifications
-        self._find_report_handle()
-        print(f"[+] Report characteristic handle: 0x{self._report_handle:04x}" if self._report_handle
-              else "[-] WARNING: Report characteristic not found")
+        # Find the Report characteristic handles for input notifications
+        self._report_handle = self._find_report_char_handle(0x01, 0x01)
+        self._mouse_report_handle = self._find_report_char_handle(0x03, 0x01)
+        self._keyboard_report_handle = self._find_report_char_handle(0x04, 0x01)
+        print(f"[+] Gamepad Report handle: 0x{self._report_handle:04x}" if self._report_handle else "[-] WARNING: Gamepad Report characteristic not found")
+        print(f"[+] Mouse Report handle: 0x{self._mouse_report_handle:04x}" if self._mouse_report_handle else "[-] WARNING: Mouse Report characteristic not found")
+        print(f"[+] Keyboard Report handle: 0x{self._keyboard_report_handle:04x}" if self._keyboard_report_handle else "[-] WARNING: Keyboard Report characteristic not found")
 
         # Find the SC2 custom characteristic handle for input notifications
         self._find_sc2_report_handle()
@@ -204,6 +210,20 @@ class HoGPeripheral:
 
     def _on_feature_report_write(self, report_id, value):
         """Called when the host writes a Feature Report to the GATT database."""
+        if report_id == 0x85:
+            if len(value) > 0:
+                mode = value[0]
+                if len(value) >= 2 and value[0] == 0x85:
+                    mode = value[1]
+                if mode == 0x01:
+                    self.steam_input_mode = True
+                    print("[+] Switch to Steam Input Mode (Gamepad notifications active)")
+                elif mode == 0x00:
+                    self.steam_input_mode = False
+                    print("[+] Switch to Lizard Mode (Mouse/Keyboard notifications active)")
+                else:
+                    print(f"[*] Unknown mode value written to Feature Report 0x85: {value.hex()}")
+
         if not self._neptune_feature_fd:
             dev_path = None
             if self.input_handler and self.input_handler._is_neptune:
@@ -340,19 +360,27 @@ class HoGPeripheral:
         )
         self.input_handler.start()
 
-    def _on_input_report(self, report_bytes):
-        """Called when a new SC2 input report is ready. Send as BLE notification."""
-        if self.att_server and self.att_server.connected:
-            if isinstance(report_bytes, tuple):
-                report_bytes_12, report_bytes_45 = report_bytes
-            else:
-                report_bytes_12 = report_bytes
-                report_bytes_45 = None
+    def _on_input_report(self, report_dict):
+        """Called when a new input report is ready. Send appropriate BLE notifications based on mode."""
+        if not self.att_server or not self.att_server.connected:
+            return
 
-            if self._report_handle:
-                self.att_server.send_notification(self._report_handle, report_bytes_12)
-            if report_bytes_45 and self._sc2_report_handle:
-                self.att_server.send_notification(self._sc2_report_handle, report_bytes_45)
+        if self.steam_input_mode:
+            # Gamepad mode
+            gamepad_12b = report_dict.get('gamepad_12b')
+            gamepad_45b = report_dict.get('gamepad_45b')
+            if gamepad_12b and self._report_handle:
+                self.att_server.send_notification(self._report_handle, gamepad_12b)
+            if gamepad_45b and self._sc2_report_handle:
+                self.att_server.send_notification(self._sc2_report_handle, gamepad_45b)
+        else:
+            # Lizard mode: send mouse and keyboard reports when they change
+            mouse_4b = report_dict.get('mouse_4b')
+            kbd_8b = report_dict.get('kbd_8b')
+            if mouse_4b and self._mouse_report_handle:
+                self.att_server.send_notification(self._mouse_report_handle, mouse_4b)
+            if kbd_8b and self._keyboard_report_handle:
+                self.att_server.send_notification(self._keyboard_report_handle, kbd_8b)
 
     def run(self):
         """Run the main event loop."""
