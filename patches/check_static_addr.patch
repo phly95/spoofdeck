@@ -1,0 +1,21 @@
+--- a/steamdeck_bt_controller_emulator/main.py
++++ b/steamdeck_bt_controller_emulator/main.py
+@@ -1,10 +1,10 @@
+ import subprocess
+ 
+ 
+ def check_static_address_set():
+-    """Check if the static BLE address is set."""
+-    result = subprocess.run(
+-        ["sudo", "btmgmt", "info"],
+-        capture_output=True,
+-        text=True,
+-    )
+-    return "StaticAddress" in result.stdout
++    """Check if the static BLE address is set.
++
++    PATCHED: Always return True to avoid btmgmt sudo issues.
++    The static address must be set manually before running the emulator.
++    Use: sudo btmgmt -> power off -> static-addr 50:CF:14:5D:DA:9C -> power on -> le on
++    """
++    return True

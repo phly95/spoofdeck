@@ -1,0 +1,6 @@
+*.deb
+__pycache__/
+*.pyc
+.env
+*.log
+/tmp/
