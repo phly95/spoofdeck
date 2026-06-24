@@ -449,30 +449,58 @@ class InputHandler:
         _send_lizard_off(self._neptune_fd)
         last_lizard_off = time.monotonic()
         print(f"[input] Neptune read loop started")
-        try:
-            while self._running:
-                r, _, _ = select.select([self._neptune_fd], [], [], 1.0)
-                now = time.monotonic()
-                if now - last_lizard_off >= 2.0:
-                    _send_lizard_off(self._neptune_fd)
-                    last_lizard_off = now
-                if r:
-                    try:
-                        raw = os.read(self._neptune_fd, 64)
-                    except BlockingIOError:
-                        continue
-                    if len(raw) == 64:
-                        reports = self._parse_neptune_report(raw)
-                        if reports and self.on_report:
-                            self.on_report(reports)
-                            if self.seq_num % 100 == 0:
-                                g12 = reports.get('gamepad_12b', b'')
-                                m4 = reports.get('mouse_4b')
-                                m4_hex = m4.hex() if m4 else 'None'
-                                print(f"[input] Neptune reports forwarded (throttled): 12b={g12.hex()[:8]}... mouse_4b={m4_hex}")
-        except Exception as e:
-            if self._running:
-                print(f"[-] Neptune read error: {type(e).__name__}: {e}")
+        retry_count = 0
+        max_retries = 10
+        while self._running and retry_count < max_retries:
+            try:
+                while self._running:
+                    r, _, _ = select.select([self._neptune_fd], [], [], 1.0)
+                    now = time.monotonic()
+                    if now - last_lizard_off >= 2.0:
+                        _send_lizard_off(self._neptune_fd)
+                        last_lizard_off = now
+                    if r:
+                        try:
+                            raw = os.read(self._neptune_fd, 64)
+                        except BlockingIOError:
+                            continue
+                        if len(raw) == 64:
+                            reports = self._parse_neptune_report(raw)
+                            if reports and self.on_report:
+                                self.on_report(reports)
+                                if self.seq_num % 100 == 0:
+                                    g12 = reports.get('gamepad_12b', b'')
+                                    m4 = reports.get('mouse_4b')
+                                    m4_hex = m4.hex() if m4 else 'None'
+                                    print(f"[input] Neptune reports forwarded (throttled): 12b={g12.hex()[:8]}... mouse_4b={m4_hex}")
+            except Exception as e:
+                if not self._running:
+                    break
+                retry_count += 1
+                print(f"[-] Neptune read error ({retry_count}/{max_retries}): {type(e).__name__}: {e}")
+                # Try to reopen the device
+                try:
+                    os.close(self._neptune_fd)
+                except OSError:
+                    pass
+                time.sleep(2)  # Wait for device to recover
+                try:
+                    from input_handler import find_neptune_hidraw
+                    dev_path = find_neptune_hidraw()
+                    if dev_path:
+                        self._neptune_fd = os.open(dev_path, os.O_RDONLY | os.O_NONBLOCK)
+                        self.device_path = dev_path
+                        print(f"[input] Neptune device reopened: {dev_path}")
+                        last_lizard_off = time.monotonic()
+                        retry_count = 0  # Reset on successful reopen
+                    else:
+                        print(f"[-] Neptune device not found, retrying in 5s...")
+                        time.sleep(5)
+                except Exception as reopen_err:
+                    print(f"[-] Neptune reopen failed: {reopen_err}")
+                    time.sleep(5)
+        if retry_count >= max_retries:
+            print(f"[-] Neptune read loop gave up after {max_retries} retries")
 
     def _evdev_read_loop(self):
         self._absinfo = dict(self.device.capabilities(verbose=False).get(ecodes.EV_ABS, []))

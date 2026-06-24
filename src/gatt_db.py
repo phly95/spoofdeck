@@ -398,8 +398,8 @@ def build_sc2_database(device_name="Steam Controller 2026"):
     # HID Information: bcdHID=1.11, bCountryCode=0, Flags=0x02 (normally connectable)
     hid_info = bytes([0x11, 0x01, 0x00, 0x02])
 
-    # PnP ID: VID source=BT SIG, VID=0x28DE, PID=0x1303, version=1.0
-    pnp_id = bytes([0x01, 0xDE, 0x28, 0x03, 0x13, 0x00, 0x01])
+    # PnP ID: VID source=USB Forum (0x02), VID=0x28DE, PID=0x1303, version=1.0
+    pnp_id = bytes([0x02, 0xDE, 0x28, 0x03, 0x13, 0x00, 0x01])
 
     # GAP Service (0x1800)
     db.add_service(SVC_GAP, [

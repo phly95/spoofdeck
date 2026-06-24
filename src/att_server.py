@@ -16,6 +16,7 @@ import ctypes.util
 import threading
 import time
 import select
+from collections import defaultdict
 
 from gatt_db import (
     GattDatabase, Attribute,
@@ -70,25 +71,63 @@ class AttServer:
         self._running = False
         self._thread = None
         self._notification_handles = set()  # CCCD-enabled handles
+        self._client_cccds = {}            # Client address -> CCCD-enabled handles (persisted for bonding)
         self.notification_count = 0
         self._on_connection = None
         self._on_disconnection = None
+        # Diagnostic counters
+        self._diag_notif_sent = defaultdict(int)     # handle -> count of sent notifications
+        self._diag_notif_dropped = defaultdict(int)  # handle -> count of dropped (no CCCD) notifications
+        self._diag_writes = []                        # list of (timestamp, handle, uuid_hex, value_hex)
+        self._diag_cccd_events = []                   # list of (timestamp, cccd_handle, value_handle, enabled)
         self._on_cccd_enabled = None
 
     def start(self):
-        """Create socket, bind, listen. Blocks until a client connects."""
+        """Create socket, bind, listen. Loops to accept connections."""
         self._create_socket()
         self._running = True
-        print(f"[att] Listening on {self.address} CID {BT_ATT_CID}")
-        self.conn, self.conn_addr = self.sock.accept()
-        print(f"[att] Client connected: {self.conn_addr}")
+        
+        while self._running:
+            print(f"[att] Listening for connection on {self.address} CID {BT_ATT_CID}...")
+            try:
+                self.conn, self.conn_addr = self.sock.accept()
+                print(f"[att] Client connected: {self.conn_addr}")
+                
+                # Reset MTU to default for new connection
+                self.mtu = 23
+                
+                # Reset diagnostic counters for new connection
+                self._diag_notif_sent.clear()
+                self._diag_notif_dropped.clear()
+                self._diag_writes.clear()
+                self._diag_cccd_events.clear()
+                
+                # Restore CCCD states for this client if they are bonded/known
+                client_ip = self.conn_addr[0] if self.conn_addr else "unknown"
+                self._notification_handles = self._client_cccds.setdefault(client_ip, set())
+                if self._notification_handles:
+                    print(f"[att] Restored CCCD handles for {client_ip}: {[f'0x{h:04x}' for h in self._notification_handles]}")
+                    # Notify application that CCCDs are already enabled
+                    if self._on_cccd_enabled:
+                        for handle in self._notification_handles:
+                            self._on_cccd_enabled(handle)
+                
+                if self._on_connection:
+                    self._on_connection(self.conn_addr)
 
-        # Note: BT_SECURITY setsockopt is not supported on fixed-CID L2CAP
-        # sockets (CID 4). SMP pairing is handled by the kernel on CID 6.
-        if self._on_connection:
-            self._on_connection(self.conn_addr)
-
-        self._pdu_loop()
+                self._pdu_loop()
+                
+                # Clean up connection
+                try:
+                    self.conn.close()
+                except Exception:
+                    pass
+                self.conn = None
+                
+            except Exception as e:
+                if self._running:
+                    print(f"[att] Accept/Connection error: {e}")
+                    time.sleep(1)
 
     def start_async(self):
         """Start in a background thread."""
@@ -149,9 +188,12 @@ class AttServer:
                 break
 
         print("[att] Client disconnected")
+        self._print_diag_summary()
         if self._on_disconnection:
             self._on_disconnection(self.conn_addr)
-        self._notification_handles.clear()
+        # Reset local active notification handles to empty set, but do not clear
+        # the client's persisted configuration in self._client_cccds.
+        self._notification_handles = set()
 
     def _handle_pdu(self, data):
         """Parse ATT opcode and dispatch to handler."""
@@ -355,21 +397,32 @@ class AttServer:
             return
 
         print(f"[att] Write: handle=0x{handle:04x} uuid={attr.uuid.hex()} len={len(value)} data={value.hex()}")
+        
+        # Record all writes for diagnostics
+        ts = time.strftime('%H:%M:%S')
+        self._diag_writes.append((ts, handle, attr.uuid.hex(), value.hex()))
+        
         cccd_uuid = uuid16_to_bytes(0x2902)
         enable_handle = None
         if attr.uuid == cccd_uuid:
             ccc_value = struct.unpack('<H', value[:2])[0] if len(value) >= 2 else 0
             value_handle = self._find_cccd_value_handle(handle)
             if value_handle is not None:
-                if ccc_value & 0x0001:
+                enabled = bool(ccc_value & 0x0001)
+                if enabled:
                     self._notification_handles.add(value_handle)
-                    print(f"[att] Notifications enabled for handle 0x{value_handle:04x}")
+                    print(f"[DIAG] ✅ CCCD ENABLED: cccd=0x{handle:04x} → value_handle=0x{value_handle:04x} (ccc=0x{ccc_value:04x})")
                     enable_handle = value_handle
                 else:
                     self._notification_handles.discard(value_handle)
-                    print(f"[att] Notifications disabled for handle 0x{value_handle:04x}")
+                    print(f"[DIAG] ❌ CCCD DISABLED: cccd=0x{handle:04x} → value_handle=0x{value_handle:04x} (ccc=0x{ccc_value:04x})")
+                self._diag_cccd_events.append((ts, handle, value_handle, enabled))
+                self._print_active_subscriptions()
             else:
                 print(f"[att] Warning: could not find value handle for CCCD 0x{handle:04x}")
+        else:
+            # Non-CCCD write — log prominently for feature reports
+            print(f"[DIAG] 📝 WRITE to handle=0x{handle:04x} uuid={attr.uuid.hex()} data={value.hex()}")
 
         self.db.write_attribute(handle, value)
         resp = struct.pack('B', ATT_OP_WRITE_RSP)
@@ -414,13 +467,88 @@ class AttServer:
             value: Notification value bytes
         """
         if handle not in self._notification_handles:
-            return  # Notifications not enabled for this handle
+            self._diag_notif_dropped[handle] += 1
+            # Log first drop and then every 200th drop per handle
+            count = self._diag_notif_dropped[handle]
+            if count == 1 or count % 200 == 0:
+                print(f"[DIAG] 🚫 NOTIFICATION DROPPED (no CCCD): handle=0x{handle:04x} len={len(value)} (dropped {count}x total)")
+                print(f"[DIAG]    Active subscriptions: {[f'0x{h:04x}' for h in sorted(self._notification_handles)]}")
+            return
 
         pdu = struct.pack('<BH', ATT_OP_HANDLE_NFY, handle) + value
         sent = self._send(pdu)
         self.notification_count += 1
-        if self.notification_count % 100 == 0:
-            print(f"[att] Notification sent (throttled): handle=0x{handle:04x} len={len(value)} count={self.notification_count}")
+        self._diag_notif_sent[handle] += 1
+        
+        # Log mouse/keyboard (len <= 8) immediately, and gamepad (len > 8) throttled
+        if len(value) <= 8 or (self.notification_count % 100 == 0):
+            print(f"[att] Notification sent: handle=0x{handle:04x} len={len(value)} value={value.hex()}")
+
+    def print_active_subscriptions(self):
+        """Public method to print current CCCD subscription state."""
+        self._print_active_subscriptions()
+
+    def _print_active_subscriptions(self):
+        """Print which handles currently have active CCCD subscriptions."""
+        handle_names = {
+            0x0012: 'Gamepad(ID1)',
+            0x0019: 'Mouse(ID3)',
+            0x001D: 'Keyboard(ID4)',
+            0x0031: 'SC2_Custom_CH1',
+            0x0034: 'SC2_Custom_CH2',
+        }
+        if self._notification_handles:
+            labels = [f'0x{h:04x}({handle_names.get(h, "?")})'for h in sorted(self._notification_handles)]
+            print(f"[DIAG] 📋 Active CCCD subscriptions: {labels}")
+        else:
+            print(f"[DIAG] 📋 Active CCCD subscriptions: (none)")
+
+    def _print_diag_summary(self):
+        """Print diagnostic summary at disconnect."""
+        print("\n" + "=" * 70)
+        print("[DIAG] === DIAGNOSTIC SUMMARY (connection ended) ===")
+        print("=" * 70)
+        
+        # CCCD events
+        print(f"\n[DIAG] CCCD Events ({len(self._diag_cccd_events)} total):")
+        handle_names = {
+            0x0012: 'Gamepad(ID1)', 0x0014: 'Gamepad_CCCD',
+            0x0019: 'Mouse(ID3)', 0x001B: 'Mouse_CCCD',
+            0x001D: 'Keyboard(ID4)', 0x001F: 'Keyboard_CCCD',
+            0x0027: 'Feature_0x85',
+            0x0031: 'SC2_Custom_CH1', 0x0032: 'SC2_CH1_CCCD',
+            0x0034: 'SC2_Custom_CH2', 0x0035: 'SC2_CH2_CCCD',
+        }
+        for ts, cccd_h, val_h, enabled in self._diag_cccd_events:
+            status = '✅ ENABLED' if enabled else '❌ DISABLED'
+            name = handle_names.get(val_h, '?')
+            print(f"  {ts}  CCCD 0x{cccd_h:04x} → 0x{val_h:04x} ({name}) {status}")
+        
+        # Non-CCCD writes (feature reports etc)
+        non_cccd_writes = [(ts, h, u, v) for ts, h, u, v in self._diag_writes 
+                           if h not in {e[1] for e in self._diag_cccd_events}]
+        if non_cccd_writes:
+            print(f"\n[DIAG] Non-CCCD Writes ({len(non_cccd_writes)} total):")
+            for ts, h, uuid_hex, val_hex in non_cccd_writes:
+                name = handle_names.get(h, '?')
+                print(f"  {ts}  handle=0x{h:04x} ({name}) data={val_hex}")
+        
+        # Notification stats
+        print(f"\n[DIAG] Notifications Sent:")
+        for h in sorted(self._diag_notif_sent.keys()):
+            name = handle_names.get(h, '?')
+            print(f"  0x{h:04x} ({name}): {self._diag_notif_sent[h]}")
+        if not self._diag_notif_sent:
+            print("  (none)")
+        
+        print(f"\n[DIAG] Notifications DROPPED (no CCCD):")
+        for h in sorted(self._diag_notif_dropped.keys()):
+            name = handle_names.get(h, '?')
+            print(f"  0x{h:04x} ({name}): {self._diag_notif_dropped[h]}")
+        if not self._diag_notif_dropped:
+            print("  (none)")
+        
+        print("=" * 70 + "\n")
 
     @property
     def connected(self):

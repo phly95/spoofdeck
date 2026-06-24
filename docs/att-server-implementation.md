@@ -28,7 +28,7 @@ Host sends ATT PDU → Kernel L2CAP → Our raw socket (CID 4) → _handle_pdu()
 
 ## GATT Database Structure
 
-### Handle Layout (37 attributes)
+### Handle Layout (74 attributes, 6 services)
 
 | Handle | UUID | Description |
 |--------|------|-------------|
@@ -45,27 +45,67 @@ Host sends ATT PDU → Kernel L2CAP → Our raw socket (CID 4) → _handle_pdu()
 | 0x000B | 0x2803 | HID Information Characteristic |
 | 0x000C | 0x2A4A | HID Information Value |
 | 0x000D | 0x2803 | Report Map Characteristic |
-| 0x000E | 0x2A4B | Report Map Value (77 bytes) |
+| 0x000E | 0x2A4B | Report Map Value (77 bytes / standard 186 bytes layout) |
 | 0x000F | 0x2803 | HID Control Point Characteristic |
 | 0x0010 | 0x2A4C | HID Control Point Value |
-| 0x0011 | 0x2803 | Report (Input) Characteristic |
-| 0x0012 | 0x2A4D | Report (Input) Value (12 bytes) |
-| 0x0013 | 0x2908 | Report Reference (Input, ID=1) |
-| 0x0014 | 0x2902 | Report (Input) CCCD |
+| 0x0011 | 0x2803 | Report (Gamepad Input) Characteristic |
+| 0x0012 | 0x2A4D | Report (Gamepad Input) Value (12 bytes) |
+| 0x0013 | 0x2908 | Report Reference (Gamepad Input, ID=1) |
+| 0x0014 | 0x2902 | Report (Gamepad Input) CCCD |
 | 0x0015 | 0x2803 | Report (Output) Characteristic |
 | 0x0016 | 0x2A4D | Report (Output) Value (1 byte) |
 | 0x0017 | 0x2908 | Report Reference (Output, ID=2) |
-| 0x0018 | 0x2800 | Battery Service Declaration |
-| 0x0019 | 0x2803 | Battery Level Characteristic |
-| 0x001A | 0x2A19 | Battery Level Value |
-| 0x001B | 0x2902 | Battery Level CCCD |
-| 0x001C | 0x2800 | Device Info Service Declaration |
-| 0x001D | 0x2803 | Manufacturer Name Characteristic |
-| 0x001E | 0x2A29 | Manufacturer Name Value |
-| 0x001F | 0x2803 | Model Number Characteristic |
-| 0x0020 | 0x2A24 | Model Number Value |
-| 0x0021 | 0x2803 | PnP ID Characteristic |
-| 0x0022 | 0x2A50 | PnP ID Value |
+| 0x0018 | 0x2803 | Report (Mouse Input) Characteristic |
+| 0x0019 | 0x2A4D | Report (Mouse Input) Value (4 bytes) |
+| 0x001A | 0x2908 | Report Reference (Mouse Input, ID=3) |
+| 0x001B | 0x2902 | Report (Mouse Input) CCCD |
+| 0x001C | 0x2803 | Report (Keyboard Input) Characteristic |
+| 0x001D | 0x2A4D | Report (Keyboard Input) Value (8 bytes) |
+| 0x001E | 0x2908 | Report Reference (Keyboard Input, ID=4) |
+| 0x001F | 0x2902 | Report (Keyboard Input) CCCD |
+| 0x0020 | 0x2803 | Feature Report 0x00 Characteristic |
+| 0x0021 | 0x2A4D | Feature Report 0x00 Value (64 bytes) |
+| 0x0022 | 0x2908 | Report Reference (Feature, ID=0x00) |
+| 0x0023 | 0x2803 | Feature Report 0x01 Characteristic |
+| 0x0024 | 0x2A4D | Feature Report 0x01 Value (64 bytes) |
+| 0x0025 | 0x2908 | Report Reference (Feature, ID=0x01) |
+| 0x0026 | 0x2803 | Feature Report 0x85 Characteristic |
+| 0x0027 | 0x2A4D | Feature Report 0x85 Value (64 bytes) |
+| 0x0028 | 0x2908 | Report Reference (Feature, ID=0x85) |
+| 0x0029 | 0x2803 | Feature Report 0x86 Characteristic |
+| 0x002A | 0x2A4D | Feature Report 0x86 Value (64 bytes) |
+| 0x002B | 0x2908 | Report Reference (Feature, ID=0x86) |
+| 0x002C | 0x2803 | Feature Report 0x87 Characteristic |
+| 0x002D | 0x2A4D | Feature Report 0x87 Value (64 bytes) |
+| 0x002E | 0x2908 | Report Reference (Feature, ID=0x87) |
+| 0x002F | 0x2800 | Valve Custom SC2 HID Service Declaration |
+| 0x0030 | 0x2803 | SC2 Input CH1 Characteristic (Notify) |
+| 0x0031 | 0x2A4D | SC2 Input CH1 Value (45 bytes) |
+| 0x0032 | 0x2902 | SC2 Input CH1 CCCD |
+| 0x0033 | 0x2803 | SC2 Input CH2 Characteristic (Notify) |
+| 0x0034 | 0x2A4D | SC2 Input CH2 Value (47 bytes) |
+| 0x0035 | 0x2902 | SC2 Input CH2 CCCD |
+| 0x0036 | 0x2803 | SC2 Report CH Characteristic (Write) |
+| 0x0037 | 0x2A4D | SC2 Report CH Value (64 bytes) |
+| 0x0038 | 0x2800 | Battery Service Declaration |
+| 0x0039 | 0x2803 | Battery Level Characteristic |
+| 0x003A | 0x2A19 | Battery Level Value (1 byte) |
+| 0x003B | 0x2902 | Battery Level CCCD |
+| 0x003C | 0x2800 | Device Info Service Declaration |
+| 0x003D | 0x2803 | Manufacturer Name Characteristic |
+| 0x003E | 0x2A29 | Manufacturer Name Value |
+| 0x003F | 0x2803 | Model Number Characteristic |
+| 0x0040 | 0x2A24 | Model Number Value |
+| 0x0041 | 0x2803 | Serial Number Characteristic |
+| 0x0042 | 0x2A25 | Serial Number Value |
+| 0x0043 | 0x2803 | Firmware Revision Characteristic |
+| 0x0044 | 0x2A26 | Firmware Revision Value |
+| 0x0045 | 0x2803 | Hardware Revision Characteristic |
+| 0x0046 | 0x2A27 | Hardware Revision Value |
+| 0x0047 | 0x2803 | Software Revision Characteristic |
+| 0x0048 | 0x2A28 | Software Revision Value |
+| 0x0049 | 0x2803 | PnP ID Characteristic |
+| 0x004A | 0x2A50 | PnP ID Value (7 bytes, Source=0x02, VID=0x28DE, PID=0x1303) |
 
 ### Host Discovery Sequence
 

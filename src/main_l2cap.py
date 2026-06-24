@@ -158,16 +158,31 @@ class HoGPeripheral:
         for handle, attr in self.gatt_db.attributes.items():
             # Report characteristic UUID is 0x2A4D
             if attr.uuid == b'\x4d\x2a':
-                # Find its descriptors
-                for desc_handle in range(handle + 1, handle + 5):
+                # Find its descriptors (scan forward until next characteristic or service)
+                desc_handle = handle + 1
+                while True:
                     desc = self.gatt_db.lookup(desc_handle)
-                    if desc and desc.uuid == b'\x08\x29':  # Report Reference UUID
+                    if not desc:
+                        break
+                    # Stop if we hit a service or characteristic declaration
+                    if desc.uuid in (b'\x00\x28', b'\x01\x28', b'\x03\x28'):
+                        break
+                    if desc.uuid == b'\x08\x29':  # Report Reference UUID
                         if len(desc.value) >= 2 and desc.value[0] == report_id and desc.value[1] == report_type:
                             return handle
+                    desc_handle += 1
         return None
+
+    # SC2 command IDs (sent via Feature Report 0x00)
+    SC2_CMD_CLEAR_MAPPINGS     = 0x81
+    SC2_CMD_GET_ATTRIBUTES     = 0x83
+    SC2_CMD_SET_MODE           = 0x85
+    SC2_CMD_SET_ATTRIBUTES     = 0x87
+    SC2_CMD_GET_SERIAL         = 0xAE
 
     def _setup_feature_report_callbacks(self):
         """Register callbacks for Feature Reports (Report IDs 0x00, 0x01, 0x85, 0x86, 0x87)."""
+        self._pending_fr_response = {}  # report_id -> response bytes (for command/response pattern)
         feature_report_ids = [0x00, 0x01, 0x85, 0x86, 0x87]
         for report_id in feature_report_ids:
             handle = self._find_report_char_handle(report_id, 0x03)  # 0x03 = Feature Report
@@ -177,22 +192,158 @@ class HoGPeripheral:
                 self.gatt_db.write_callbacks[handle] = lambda value, r_id=report_id: self._on_feature_report_write(r_id, value)
 
     def _on_feature_report_read(self, report_id):
-        """Called when the host reads a Feature Report from the GATT database."""
-        if not self._neptune_feature_fd:
-            dev_path = None
-            if self.input_handler and self.input_handler._is_neptune:
-                dev_path = self.input_handler.device_path
-            if not dev_path:
-                from input_handler import find_neptune_hidraw
-                dev_path = find_neptune_hidraw()
-            if dev_path:
-                try:
-                    import os
-                    self._neptune_feature_fd = os.open(dev_path, os.O_RDWR)
-                    print(f"[+] Neptune feature report proxy fd opened: {dev_path}")
-                except Exception as e:
-                    print(f"[-] Failed to open Neptune feature report proxy: {e}")
+        """Called when the host reads a Feature Report from the GATT database.
+        
+        For FR 0x00 and 0x01 (SC2 command channels), return the pending
+        synthetic response from the last command write. For other FRs,
+        proxy to Neptune if available.
+        """
+        # SC2 command channels — return synthetic response
+        if report_id in (0x00, 0x01):
+            response = self._pending_fr_response.pop(report_id, None)
+            if response:
+                print(f"[DIAG] 📤 FR 0x{report_id:02x} READ → returning synthetic response: {response[:20].hex()}...")
+                return response
+            else:
+                print(f"[DIAG] 📤 FR 0x{report_id:02x} READ → no pending response, returning zeros")
+                return b'\x00' * 64
 
+        # Other Feature Reports — proxy to Neptune hardware
+        return self._proxy_feature_read(report_id)
+
+    def _on_feature_report_write(self, report_id, value):
+        """Called when the host writes a Feature Report to the GATT database.
+        
+        For FR 0x00 and 0x01, parse the SC2 command and generate a synthetic
+        response. For FR 0x85, handle the mode switch. For others, proxy to Neptune.
+        """
+        print(f"[DIAG] ⭐ FEATURE REPORT WRITE: ID=0x{report_id:02x} len={len(value)} data={value[:20].hex()}{'...' if len(value) > 20 else ''}")
+
+        if report_id == 0x85:
+            self._handle_mode_switch(value)
+            return
+
+        # SC2 command channels — handle synthetically
+        if report_id in (0x00, 0x01):
+            self._handle_sc2_command(report_id, value)
+            return
+
+        # Other Feature Reports — proxy to Neptune
+        self._proxy_feature_write(report_id, value)
+
+    def _handle_mode_switch(self, value):
+        """Handle Feature Report 0x85 (mode switch between Lizard and Steam Input)."""
+        if len(value) > 0:
+            mode = value[0]
+            if len(value) >= 2 and value[0] == 0x85:
+                mode = value[1]
+            if mode == 0x01:
+                self.steam_input_mode = True
+                print("[DIAG] ⭐ MODE SWITCH: Lizard → Steam Input Mode")
+                print(f"[DIAG]    Gamepad handle=0x{self._report_handle:04x}" if self._report_handle else "[DIAG]    Gamepad handle=NONE")
+                print(f"[DIAG]    SC2 Custom handle=0x{self._sc2_report_handle:04x}" if self._sc2_report_handle else "[DIAG]    SC2 Custom handle=NONE")
+                if self.att_server:
+                    self.att_server.print_active_subscriptions()
+            elif mode == 0x00:
+                self.steam_input_mode = False
+                print("[DIAG] ⭐ MODE SWITCH: Steam Input → Lizard Mode")
+                if self.att_server:
+                    self.att_server.print_active_subscriptions()
+            else:
+                print(f"[DIAG] ❓ Unknown mode value written to Feature Report 0x85: {value.hex()}")
+
+    def _handle_sc2_command(self, report_id, value):
+        """Parse and respond to SC2 commands written to Feature Report 0x00 or 0x01.
+        
+        Steam Client communicates with the controller via a command/response protocol:
+          1. Host writes a command to FR 0x00 (e.g., GET_ATTRIBUTES = 0x83)
+          2. Host reads FR 0x00 to retrieve the response
+        
+        We intercept these and return synthetic SC2-appropriate responses.
+        """
+        if len(value) < 2:
+            print(f"[DIAG] ⚠️  SC2 command too short: {value.hex()}")
+            return
+
+        # Parse command — format is typically: [msg_type, cmd_id, ...]
+        # Data from Steam: 01 83 00 00 ... → msg_type=0x01, cmd=0x83
+        cmd = value[1] if len(value) > 1 else value[0]
+        
+        print(f"[DIAG] 🎮 SC2 Command on FR 0x{report_id:02x}: cmd=0x{cmd:02x} data={value[:10].hex()}")
+
+        response = bytearray(64)
+
+        if cmd == self.SC2_CMD_GET_ATTRIBUTES:
+            # GET_ATTRIBUTES (0x83) — Return device attributes
+            # Steam uses this to identify the controller and its capabilities
+            response[0] = 0x01       # Message type
+            response[1] = 0x83       # Echo command
+            response[2] = 0x00       # Status: success
+            # Board revision
+            response[3] = 0x02       # Board revision (SC2 = 2)
+            # Firmware build timestamp (fake but plausible: 2025-01-15)
+            response[4] = 0xE9       # Year low byte (2025 = 0x07E9)
+            response[5] = 0x07       # Year high byte
+            response[6] = 0x01       # Month (January)
+            response[7] = 0x0F       # Day (15)
+            # Hardware revision
+            response[8] = 0x01       # HW revision major
+            response[9] = 0x00       # HW revision minor
+            # Firmware build number
+            response[10] = 0x39      # Build number low (57)
+            response[11] = 0x00      # Build number high
+            # Bootloader build
+            response[12] = 0x00
+            response[13] = 0x00
+            # Radio firmware version
+            response[14] = 0x07
+            response[15] = 0x01
+            print(f"[DIAG] 🎮 → Responding to GET_ATTRIBUTES with synthetic SC2 device info")
+
+        elif cmd == self.SC2_CMD_GET_SERIAL:
+            # GET_SERIAL (0xAE) — Return serial number
+            response[0] = 0x01       # Message type
+            response[1] = 0xAE       # Echo command
+            response[2] = 0x00       # Status: success
+            # Serial number as ASCII (10 chars)
+            serial = b'SC2DECK001'
+            response[3:3+len(serial)] = serial
+            print(f"[DIAG] 🎮 → Responding to GET_SERIAL with '{serial.decode()}'")
+
+        elif cmd == self.SC2_CMD_CLEAR_MAPPINGS:
+            # CLEAR_MAPPINGS (0x81) — Acknowledge
+            response[0] = 0x01
+            response[1] = 0x81
+            response[2] = 0x00       # Status: success
+            print(f"[DIAG] 🎮 → Acknowledging CLEAR_MAPPINGS")
+
+        elif cmd == self.SC2_CMD_SET_ATTRIBUTES:
+            # SET_ATTRIBUTES (0x87) — Acknowledge
+            response[0] = 0x01
+            response[1] = 0x87
+            response[2] = 0x00       # Status: success
+            print(f"[DIAG] 🎮 → Acknowledging SET_ATTRIBUTES")
+
+        elif cmd == self.SC2_CMD_SET_MODE:
+            # SET_MODE (0x85) — Handle mode switch, also acknowledge
+            self._handle_mode_switch(value)
+            response[0] = 0x01
+            response[1] = 0x85
+            response[2] = 0x00       # Status: success
+            print(f"[DIAG] 🎮 → Acknowledging SET_MODE")
+
+        else:
+            # Unknown command — echo it back with success status
+            response[0] = 0x01
+            response[1] = cmd
+            response[2] = 0x00       # Status: success
+            print(f"[DIAG] 🎮 → Unknown SC2 command 0x{cmd:02x}, echoing with success status")
+
+        self._pending_fr_response[report_id] = bytes(response)
+
+    def _proxy_feature_read(self, report_id):
+        """Proxy a Feature Report read to Neptune hardware (for non-SC2 reports)."""
+        self._ensure_neptune_feature_fd()
         if self._neptune_feature_fd:
             import fcntl, array
             length = 65
@@ -205,40 +356,12 @@ class HoGPeripheral:
                 return bytes(buf[1:])
             except Exception as e:
                 print(f"[-] Proxy Feature Report 0x{report_id:02x} read error: {e}")
-
+                self._close_neptune_feature_fd()
         return b'\x00' * 64
 
-    def _on_feature_report_write(self, report_id, value):
-        """Called when the host writes a Feature Report to the GATT database."""
-        if report_id == 0x85:
-            if len(value) > 0:
-                mode = value[0]
-                if len(value) >= 2 and value[0] == 0x85:
-                    mode = value[1]
-                if mode == 0x01:
-                    self.steam_input_mode = True
-                    print("[+] Switch to Steam Input Mode (Gamepad notifications active)")
-                elif mode == 0x00:
-                    self.steam_input_mode = False
-                    print("[+] Switch to Lizard Mode (Mouse/Keyboard notifications active)")
-                else:
-                    print(f"[*] Unknown mode value written to Feature Report 0x85: {value.hex()}")
-
-        if not self._neptune_feature_fd:
-            dev_path = None
-            if self.input_handler and self.input_handler._is_neptune:
-                dev_path = self.input_handler.device_path
-            if not dev_path:
-                from input_handler import find_neptune_hidraw
-                dev_path = find_neptune_hidraw()
-            if dev_path:
-                try:
-                    import os
-                    self._neptune_feature_fd = os.open(dev_path, os.O_RDWR)
-                    print(f"[+] Neptune feature report proxy fd opened: {dev_path}")
-                except Exception as e:
-                    print(f"[-] Failed to open Neptune feature report proxy: {e}")
-
+    def _proxy_feature_write(self, report_id, value):
+        """Proxy a Feature Report write to Neptune hardware (for non-SC2 reports)."""
+        self._ensure_neptune_feature_fd()
         if self._neptune_feature_fd:
             try:
                 import fcntl, array
@@ -249,6 +372,36 @@ class HoGPeripheral:
                 print(f"[att] Proxy Feature Report 0x{report_id:02x} write success, len={len(value)}")
             except Exception as e:
                 print(f"[-] Proxy Feature Report 0x{report_id:02x} write error: {e}")
+                self._close_neptune_feature_fd()
+
+    def _ensure_neptune_feature_fd(self):
+        """Open the Neptune feature report fd if not already open."""
+        if self._neptune_feature_fd:
+            return
+        dev_path = None
+        if self.input_handler and self.input_handler._is_neptune:
+            dev_path = self.input_handler.device_path
+        if not dev_path:
+            from input_handler import find_neptune_hidraw
+            dev_path = find_neptune_hidraw()
+        if dev_path:
+            try:
+                import os
+                self._neptune_feature_fd = os.open(dev_path, os.O_RDWR)
+                print(f"[+] Neptune feature report proxy fd opened: {dev_path}")
+            except Exception as e:
+                print(f"[-] Failed to open Neptune feature report proxy: {e}")
+
+    def _close_neptune_feature_fd(self):
+        """Close the Neptune feature report fd on error (will be reopened on next attempt)."""
+        if self._neptune_feature_fd:
+            try:
+                import os
+                os.close(self._neptune_feature_fd)
+            except OSError:
+                pass
+            self._neptune_feature_fd = None
+            print(f"[DIAG] Neptune feature fd closed (will reopen on next use)")
 
     def _on_att_connection(self, addr):
         print(f"[+] ATT connection established from {addr}")
@@ -295,6 +448,43 @@ class HoGPeripheral:
                     time.sleep(0.5)
                 print(f"[+] SC2 Custom test notifications complete")
             threading.Thread(target=_send_periodic, daemon=True).start()
+
+        elif handle == self._mouse_report_handle and self.att_server:
+            import threading, time, struct
+            def _send_periodic_mouse():
+                time.sleep(1)
+                print(f"[+] Starting periodic test mouse notifications")
+                for i in range(10):
+                    if not self.att_server.connected:
+                        break
+                    # Move mouse right by 10 units (dx=10, dy=0)
+                    report = struct.pack('<Bbbb', 0, 10, 0, 0)
+                    self.att_server.send_notification(self._mouse_report_handle, report)
+                    print(f"[+] Test Mouse {i}: dx=10")
+                    time.sleep(0.5)
+                print(f"[+] Test mouse notifications complete")
+            threading.Thread(target=_send_periodic_mouse, daemon=True).start()
+
+        elif handle == self._keyboard_report_handle and self.att_server:
+            import threading, time, struct
+            def _send_periodic_kbd():
+                time.sleep(1)
+                print(f"[+] Starting periodic test keyboard notifications")
+                for i in range(5):
+                    if not self.att_server.connected:
+                        break
+                    # Key down: A key (0x04)
+                    report_down = struct.pack('<BB6B', 0, 0, 0x04, 0, 0, 0, 0, 0)
+                    self.att_server.send_notification(self._keyboard_report_handle, report_down)
+                    print(f"[+] Test Kbd {i}: A down")
+                    time.sleep(0.1)
+                    # Key up
+                    report_up = struct.pack('<BB6B', 0, 0, 0, 0, 0, 0, 0, 0)
+                    self.att_server.send_notification(self._keyboard_report_handle, report_up)
+                    print(f"[+] Test Kbd {i}: A up")
+                    time.sleep(1.0)
+                print(f"[+] Test keyboard notifications complete")
+            threading.Thread(target=_send_periodic_kbd, daemon=True).start()
 
     def _on_att_disconnection(self, addr):
         print(f"[+] ATT connection lost from {addr}")

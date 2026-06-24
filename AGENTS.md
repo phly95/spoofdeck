@@ -68,28 +68,30 @@ Make a **Steam Deck** present itself as a **Steam Controller 2026 (SC2)** over *
 ### Current Status
 
 **✅ Working (End-to-End):**
-- Raw L2CAP ATT server accepts connections on CID 4
-- MTU exchange succeeds (negotiated 517)
-- Service discovery succeeds (5 services, 34 attributes)
-- Characteristic discovery succeeds (12 characteristics found)
-- Descriptor discovery succeeds (CCCDs, Report References)
-- Host reads HID Information, Report Map, PnP ID, Battery Level
-- Host writes CCCD to enable notifications on Report/Input (0x0012)
-- `/dev/hidrawN` created on host
-- Host creates `/dev/input/eventN` with correct gamepad capabilities
-- SMP pairing works (auto-confirm via Agent1 D-Bus interface)
-- **Physical Deck controller input works** — reads from `/dev/hidraw3` (Neptune HID, 64-byte reports)
-- Input handler maps Neptune buttons → SC2 12-byte report format
-- ATT notifications (12 bytes) sent and forwarded by hog-ll to uhid
-- **Input events flow from Deck to host** — sticks, buttons, triggers all work
-- Connection stable for 5+ minutes (use `connect` not `pair`)
+- Raw L2CAP ATT server accepts connections on CID 4.
+- MTU exchange succeeds (negotiated 517).
+- Service discovery succeeds (5 services, 74 attributes).
+- Characteristic discovery succeeds (all characteristics found).
+- Descriptor discovery succeeds (CCCDs, Report References).
+- Host reads HID Information, Report Map, PnP ID, Battery Level.
+- PnP ID format corrected: Vendor ID Source set to USB-IF (0x02) with Valve's VID (0x28DE) and PID (0x1303).
+- Host writes CCCD to enable notifications on Report/Input (0x0012) and Mouse (0x0019) / Keyboard (0x001d).
+- `/dev/hidrawN` created on host.
+- Host creates `/dev/input/eventN` for Mouse and Keyboard with correct capabilities.
+- SMP pairing works (auto-confirm via Agent1 D-Bus interface).
+- **Physical Deck controller input works** — reads from `/dev/hidraw3` (Neptune HID, 64-byte reports).
+- Input handler maps Neptune buttons → SC2 12-byte report format.
+- **Lizard Mode input events flow** — Relative mouse movements (right trackpad) and key taps successfully register on host `evdev` event nodes (`/dev/input/event256`/`257`).
+- Connection stable for 5+ minutes (use `connect` not `pair`).
+- **Synthetic SC2 Command Handler** — Feature Report 0x00 (SC2 command channel) intercepted locally instead of proxying to Neptune. Handles GET_ATTRIBUTES, GET_SERIAL, CLEAR_MAPPINGS, SET_ATTRIBUTES, SET_MODE with synthetic SC2 device info responses.
+- **Neptune Auto-Recovery** — Input handler retries opening hidraw device on crash (2s delay, 10 retries).
+- **Comprehensive Diagnostic Logging** — `[DIAG]` tagged logs for CCCD subscriptions, notification drops, Feature Report writes, and full disconnect summary.
 
 ### What Needs to Happen Next
 
-1. **Fix PnP ID response format** — BlueZ logs `Error reading PNP_ID: Protocol error` (non-fatal but should fix)
-2. **Steam Input integration** — Test with Steam Client on host to verify SC2 is recognized as a Steam Input device
-3. **Steam Client auto-reconnect** — Ensure the Deck reconnects automatically after host PC reboot
-4. **Trackpad/gyro forwarding** — Neptune has dual trackpads and IMU; forward these as additional HID reports (requires Report Map update for >12 bytes)
+1. **Test Synthetic SC2 Responses with Steam** — Run Steam on the host PC and watch `[DIAG]` logs. If the GET_ATTRIBUTES response format is correct, Steam should proceed past the retry loop to Feature Report 0x85 (mode switch). If not, refine the synthetic response format based on InputPlumber/SC2 protocol research.
+2. **Trackpad/IMU Forwarding in Gamepad Mode** — Update `src/input_handler.py` to map Neptune's dual trackpad coordinates and IMU (gyro/accelerometer) data into the custom 45-byte/47-byte SC2 report format.
+3. **Daemon Auto-Reconnect** — Ensure the Deck automatically restarts advertising and accepts connections cleanly upon host reconnects.
 
 ### Files You Must Read Before Making Changes
 
