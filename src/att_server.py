@@ -72,6 +72,7 @@ class AttServer:
         self._notification_handles = set()  # CCCD-enabled handles
         self._on_connection = None
         self._on_disconnection = None
+        self._on_cccd_enabled = None
 
     def start(self):
         """Create socket, bind, listen. Blocks until a client connects."""
@@ -344,6 +345,7 @@ class AttServer:
 
         print(f"[att] Write: handle=0x{handle:04x} uuid={attr.uuid.hex()} len={len(value)} data={value.hex()}")
         cccd_uuid = uuid16_to_bytes(0x2902)
+        enable_handle = None
         if attr.uuid == cccd_uuid:
             ccc_value = struct.unpack('<H', value[:2])[0] if len(value) >= 2 else 0
             value_handle = self._find_cccd_value_handle(handle)
@@ -351,6 +353,7 @@ class AttServer:
                 if ccc_value & 0x0001:
                     self._notification_handles.add(value_handle)
                     print(f"[att] Notifications enabled for handle 0x{value_handle:04x}")
+                    enable_handle = value_handle
                 else:
                     self._notification_handles.discard(value_handle)
                     print(f"[att] Notifications disabled for handle 0x{value_handle:04x}")
@@ -360,6 +363,9 @@ class AttServer:
         self.db.write_attribute(handle, value)
         resp = struct.pack('B', ATT_OP_WRITE_RSP)
         self._send(resp)
+
+        if enable_handle is not None and self._on_cccd_enabled:
+            self._on_cccd_enabled(enable_handle)
 
     def _handle_write_cmd(self, data):
         """Handle Write Command (0x52) — no response."""

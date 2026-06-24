@@ -4,7 +4,7 @@ Make a Steam Deck present itself as a Steam Controller 2026 over Bluetooth Low E
 
 ## Current Status
 
-**HOGP Lifecycle Complete, Notifications Arriving at Host** — The Deck runs a raw L2CAP ATT server on CID 4, bypassing BlueZ's buggy GATT server. MTU exchange, service discovery, characteristic discovery, CCCD enable, and input report notifications all work. The host creates `/dev/hidrawN` and an input device (`/dev/input/eventN`). ATT notifications with 13-byte HID reports (Report ID + 12-byte data) arrive at the host's HCI layer (confirmed via btmon). However, the host's BlueZ hog-ll driver silently drops the notifications instead of forwarding them to uhid — a BlueZ-side issue requiring further investigation.
+**Working End-to-End** — The Deck presents as a Bluetooth HID gamepad ("Steam Controller 2026") to the host PC. **Physical Deck controller input** (sticks, buttons, triggers) is read directly from Neptune's HID hidraw device, mapped to the SC2 report format, and forwarded as BLE HID notifications that appear as native input events on the host's `/dev/input/eventN`. The host recognizes it as a gamepad with full capabilities (16 buttons, 6 axes, 2 triggers).
 
 ## Architecture
 
@@ -20,7 +20,10 @@ Make a Steam Deck present itself as a Steam Controller 2026 over Bluetooth Low E
 │     └─ Sends input reports as BLE notifications           │
 │                                                          │
 │  BlueZ handles: SMP (CID 6) + Advertising                │
-│  Input: /dev/input/event10 (Xbox 360 pad)                │
+│  Input: /dev/hidraw3 (Neptune controller HID)            │
+│  └─ input_handler.py reads 64-byte reports               │
+│  └─ Maps Neptune buttons → SC2 12-byte report            │
+│  └─ Sends as ATT notifications (no Report ID prefix)     │
 └──────────────────────────────────────────────────────────┘
               │
               │ BLE (static random addr C2:12:34:56:78:9A)
@@ -65,12 +68,15 @@ journalctl -u sc2-hogp -f
 ### On the Host:
 
 ```bash
-# Scan and pair
+# Scan and connect (NOT pair — pair tries BR/EDR which tears down LE)
 bluetoothctl --timeout 10 scan on
-bluetoothctl pair C2:12:34:56:78:9A
+bluetoothctl connect C2:12:34:56:78:9A
 
 # Check hidraw
 ls -la /dev/hidraw*
+
+# Check input device
+evtest /dev/input/eventN
 ```
 
 ## Project Structure
@@ -101,11 +107,14 @@ steamdeck-sc2-spoof/
 │   ├── agent.py                 # BlueZ Agent1 (auto-confirm)
 │   ├── adv.py                   # BLE advertisement
 │   ├── bluez.py                 # BlueZ D-Bus helpers
-│   ├── input_handler.py         # Xbox 360 → SC2 input mapping
+│   ├── input_handler.py         # Neptune HID → SC2 input mapping
 │   ├── main.py                  # DEPRECATED — BlueZ GATT (broken)
 │   └── gatt_app.py              # DEPRECATED — D-Bus GATT objects
 ├── scripts/
-│   └── setup.sh                 # Deck setup script
+│   ├── setup.sh                 # Deck setup script
+│   ├── deploy.sh                # Deploy source + restart service
+│   ├── pair.py                  # Auto-connect via pexpect
+│   └── diagnose.sh              # Full Deck status diagnostic
 └── tests/                       # Test scripts
 ```
 
@@ -121,7 +130,7 @@ steamdeck-sc2-spoof/
 
 ## Known Issues
 
-1. **hog-ll driver drops notifications** — Host receives ATT notifications (confirmed via btmon) but BlueZ's hog-ll driver doesn't forward them to uhid/input. Likely a BlueZ 5.72 bug with our GATT profile layout.
+1. **PnP ID format** — BlueZ logs `Error reading PNP_ID: Protocol error` (non-fatal, hog-ll still creates uhid)
 2. **Host shows KDE pairing dialog** — Auto-confirm works on Deck side but host user must click "yes"
 
 ## Acknowledgments

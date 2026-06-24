@@ -28,7 +28,7 @@ Host sends ATT PDU → Kernel L2CAP → Our raw socket (CID 4) → _handle_pdu()
 
 ## GATT Database Structure
 
-### Handle Layout (34 attributes)
+### Handle Layout (37 attributes)
 
 | Handle | UUID | Description |
 |--------|------|-------------|
@@ -95,23 +95,89 @@ The HID Report Map descriptor defines the input report format. For a gamepad:
 
 The Report ID 2 (Output) exists solely to make BlueZ's hog-ll driver set `num_reports > 1`, which causes it to expect the Report ID as the first byte of ATT notifications.
 
-### Input Report Format (13 bytes on wire)
+### Input Report Format (12 bytes notification)
 
-ATT notifications include the Report ID prefix when `num_reports > 1`:
+ATT notifications send raw HID report data **without** Report ID prefix. BlueZ's hog-ll driver prepends the Report ID via `bt_uhid_input()` using the `id` from the Report Reference descriptor.
 ```
-Byte 0:     Report ID (0x01)
-Bytes 1-2:  16 buttons (1 bit each, LE)
-Bytes 3-4:  X axis (signed 16-bit LE)
-Bytes 5-6:  Y axis (signed 16-bit LE)
-Bytes 7-8:  Rx axis (signed 16-bit LE)
-Bytes 9-10: Ry axis (signed 16-bit LE)
-Byte 11:    Z trigger (unsigned 8-bit)
-Byte 12:    Rz trigger (unsigned 8-bit)
+Bytes 0-1:   16 buttons (1 bit each, LE)
+Bytes 2-3:   X axis (signed 16-bit LE)
+Bytes 4-5:   Y axis (signed 16-bit LE)
+Bytes 6-7:   Rx axis (signed 16-bit LE)
+Bytes 8-9:   Ry axis (signed 16-bit LE)
+Byte 10:     Z trigger (unsigned 8-bit)
+Byte 11:     Rz trigger (unsigned 8-bit)
 ```
+
+## Neptune HID Input Source
+
+### Why hidraw, Not evdev
+
+The `hid-steam` kernel driver only generates evdev events when `gamepad_mode` is true (requires Steam button long-press or Steam running). Without Steam, the controller is in **lizard mode** where buttons map to keyboard scancodes — evdev events exist but contain no real gamepad data. Solution: read directly from `/dev/hidraw3`.
+
+### Finding the Gamepad hidraw
+
+The Neptune controller (VID=0x28DE, PID=0x1205) exposes 3 hidraw interfaces. The gamepad one is identified by `HID_PHYS` containing `input2`:
+- `/dev/hidraw3` — USB interface 2 (gamepad: sticks, buttons, triggers)
+- Other interfaces — trackpads, IMU, etc.
+
+### Neptune HID Report Format (type 0x09, 64 bytes)
+
+The controller sends 64-byte reports with NO Report ID prefix (HID descriptor has no Report ID). Report type 0x09 = `ID_CONTROLLER_DECK_STATE`.
+
+| Offset | Field |
+|--------|-------|
+| 0-3 | Header: `01 00 09 40` |
+| 4-7 | Frame counter (u32 LE) |
+| 8 | Buttons: A/X/B/Y/L1/R1/L2/R2 |
+| 9 | Buttons: L5/Menu/Steam/Options/Down/Left/Right/Up |
+| 10 | Buttons: L3/RPadTouch/LPadTouch/RPadPress/LPadPress/R5 |
+| 11 | Buttons: R3 |
+| 13 | Buttons: RStickTouch/LStickTouch/R4/L4 |
+| 14 | Buttons: QuickAccess |
+| 16-23 | Trackpads: LPadXY, RPadXY (i16 LE) |
+| 24-35 | IMU: accelXYZ, gyroXYZ (i16 LE) |
+| 44-47 | Triggers: L/R (u16 LE, 0..32767) |
+| 48-55 | Sticks: LX/LY/RX/RY (i16 LE, -32767..32767) |
+| 56-63 | Force: pad/stick capacitive touch |
+
+### Button Mapping (Neptune → SC2)
+
+| Neptune | SC2 bitmask |
+|---------|-------------|
+| byte8 bit0 (A) | 0x0001 (BTN_SOUTH) |
+| byte8 bit2 (B) | 0x0002 (BTN_EAST) |
+| byte8 bit1 (X) | 0x0004 (BTN_NORTH) |
+| byte8 bit3 (Y) | 0x0008 (BTN_WEST) |
+| byte8 bit4 (L1) | 0x0010 (BTN_TL) |
+| byte8 bit5 (R1) | 0x0020 (BTN_TR) |
+| byte9 bit1 (Menu) | 0x0040 (BTN_SELECT) |
+| byte9 bit3 (Options) | 0x0080 (BTN_START) |
+| byte9 bit2 (Steam) | 0x0100 (BTN_MODE) |
+| byte10 bit1 (L3) | 0x0200 (BTN_THUMBL) |
+| byte11 bit5 (R3) | 0x0400 (BTN_THUMBR) |
+| byte9 bit7 (Up) | 0x0800 (DPAD_UP) |
+| byte9 bit4 (Down) | 0x1000 (DPAD_DOWN) |
+| byte9 bit5 (Left) | 0x2000 (DPAD_LEFT) |
+| byte9 bit6 (Right) | 0x4000 (DPAD_RIGHT) |
+
+Sticks: direct copy (same format). Triggers: `>> 7` to scale from 16-bit to 8-bit.
+
+### Lizard Mode Control
+
+Lizard mode re-enables every ~2 seconds. Must periodically re-send disable commands via `os.write()`:
+1. `[0x01, 0x00, 0x81] + [0]*61` — ClearDigitalMappings
+2. `[0x01, 0x00, 0x87, 0x03, 0x08, 0x07, 0x00] + [0]*57` — disable left trackpad mouse
+3. `[0x01, 0x00, 0x87, 0x03, 0x15, 0x00, 0x00] + [0]*57` — disable smooth mouse
+
+**Note**: `ioctl(fd, HIDIOCSFEATURE, ...)` returns EINVAL on hidraw. Use `os.write()` for output reports.
+
+### Reference
+
+[InputPlumber](https://github.com/ShadowBlip/InputPlumber) — Neptune protocol documentation
 
 ### Long Read (Read Blob)
 
-Report Map is >200 bytes, exceeding the default MTU of 23. The host sends:
+Report Map is 77 bytes, exceeding the default MTU of 23. The host sends:
 1. `Read Blob Request` with offset 0
 2. Server responds with data starting at offset 0
 3. Host sends `Read Blob Request` with offset = previous response length

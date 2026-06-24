@@ -35,8 +35,12 @@ Make a **Steam Deck** present itself as a **Steam Controller 2026 (SC2)** over *
 │  ├─ LE advertising (LEAdvertisingManager1)               │
 │  └─ Agent registration (AgentManager1)                   │
 │                                                          │
-│  Input: /dev/input/event10 (Xbox 360 pad)                │
-│  └─ input_handler.py reads → sends as BLE notifications  │
+│  Input: /dev/hidraw3 (Neptune controller, USB iface 2)   │
+│  ├─ input_handler.py reads 64-byte HID reports           │
+│  ├─ Maps Neptune buttons → SC2 12-byte report            │
+│  └─ Sends as ATT notifications (no Report ID prefix)     │
+│                                                          │
+│  Lizard mode: periodically re-sends 0x81 cmd to disable  │
 └──────────────────────────────────────────────────────────┘
               │
               │ BLE (static random addr C2:12:34:56:78:9A)
@@ -63,7 +67,7 @@ Make a **Steam Deck** present itself as a **Steam Controller 2026 (SC2)** over *
 
 ### Current Status
 
-**✅ Working:**
+**✅ Working (End-to-End):**
 - Raw L2CAP ATT server accepts connections on CID 4
 - MTU exchange succeeds (negotiated 517)
 - Service discovery succeeds (5 services, 34 attributes)
@@ -74,16 +78,18 @@ Make a **Steam Deck** present itself as a **Steam Controller 2026 (SC2)** over *
 - `/dev/hidrawN` created on host
 - Host creates `/dev/input/eventN` with correct gamepad capabilities
 - SMP pairing works (auto-confirm via Agent1 D-Bus interface)
-- Input handler reads Deck Xbox 360 pad and produces 12-byte HID reports
-- ATT notifications (13 bytes: Report ID + report) sent and arrive at host HCI (confirmed via btmon)
-
-**❌ Not Yet Working:**
-- Host's BlueZ hog-ll driver drops notifications — doesn't forward to uhid/input
-- Zero events arrive at `/dev/input/eventN` on host
+- **Physical Deck controller input works** — reads from `/dev/hidraw3` (Neptune HID, 64-byte reports)
+- Input handler maps Neptune buttons → SC2 12-byte report format
+- ATT notifications (12 bytes) sent and forwarded by hog-ll to uhid
+- **Input events flow from Deck to host** — sticks, buttons, triggers all work
+- Connection stable for 5+ minutes (use `connect` not `pair`)
 
 ### What Needs to Happen Next
 
-1. **Fix hog-ll notification forwarding** — BlueZ 5.72 on the host receives ATT notifications at HCI level but silently drops them. Investigate with `bluetoothd --debug` on host, try fresh pairing, check if BlueZ's ATT client properly routes notifications from our raw L2CAP socket.
+1. **Fix PnP ID response format** — BlueZ logs `Error reading PNP_ID: Protocol error` (non-fatal but should fix)
+2. **Steam Input integration** — Test with Steam Client on host to verify SC2 is recognized as a Steam Input device
+3. **Steam Client auto-reconnect** — Ensure the Deck reconnects automatically after host PC reboot
+4. **Trackpad/gyro forwarding** — Neptune has dual trackpads and IMU; forward these as additional HID reports (requires Report Map update for >12 bytes)
 
 ### Files You Must Read Before Making Changes
 
@@ -91,7 +97,7 @@ Make a **Steam Deck** present itself as a **Steam Controller 2026 (SC2)** over *
 
 | File | Lines | Why |
 |------|-------|-----|
-| **AGENTS.md** (this file) | 287 | Full project context, architecture, how to run, gotchas |
+| **AGENTS.md** (this file) | 542 | Full project context, architecture, how to run, gotchas, working principles |
 | `docs/sc2-protocol.md` | 172 | SC2 BLE protocol — PIDs, UUIDs, report formats, button bitmask, mode switching |
 | `docs/att-server-implementation.md` | 134 | ATT opcode table, handle layout, host discovery sequence, CCCD handling |
 | `research/raw-l2cap-viability.md` | 76 | Confirmed working socket setup code, architecture diagram, ATT opcodes |
@@ -124,6 +130,254 @@ Make a **Steam Deck** present itself as a **Steam Controller 2026 (SC2)** over *
 
 ---
 
+## Working Principles — How to Investigate Efficiently
+
+> **The main thread's context window is finite and precious.** This project involves SSH debugging, BLE protocol analysis, BlueZ source code reading, and iterative deploy/test cycles. If you do all of this in the main thread, you'll fill the context before reaching a solution. Follow these principles.
+
+### Principle 1: Actors for Research, Main Thread for Decisions
+
+| Phase | Who Does It | Why |
+|-------|-------------|-----|
+| Reading BlueZ source code | `actor(explore)` | 500+ lines of hog-lib.c / uhid.c analysis fills context fast |
+| Analyzing btmon / host logs | `actor(explore)` | Log parsing is mechanical, conclusions are what matter |
+| Checking Deck SSH logs | `actor(explore)` | Repeated `sshpass ssh deck@...` calls add up |
+| SSH restart/test cycles | `actor(general)` | Deploy → restart → pair → check can run autonomously |
+| Writing code changes | **Main thread** | Needs full context of architecture + findings |
+| Making decisions | **Main thread** | Needs synthesized results from actors, not raw data |
+
+**The pattern**: Spawn an actor with a specific question, get a concise answer back, act on it. Don't do the investigation yourself.
+
+### Principle 2: Batch SSH Operations
+
+**Bad** (fills context with 10+ SSH round-trips):
+```
+sshpass ssh deck@... "check service status"
+sshpass ssh deck@... "restart service"
+sshpass ssh deck@... "check logs"
+sshpass ssh deck@... "check logs again"
+sshpass ssh deck@... "check if device exists"
+```
+
+**Good** (one script, one deployment):
+```bash
+# Write a diagnostic script once
+cat > /tmp/diagnose.sh << 'EOF'
+#!/bin/bash
+echo "=== Service Status ==="
+systemctl status sc2-hogp --no-pager | head -5
+echo "=== Last 20 Logs ==="
+journalctl -u sc2-hogp -n 20 --no-pager
+echo "=== Connection State ==="
+bluetoothctl info C2:12:34:56:78:9A 2>/dev/null | head -10
+echo "=== Input Devices ==="
+ls /sys/class/input/ | while read d; do
+  name=$(cat /sys/class/input/$d/device/name 2>/dev/null)
+  echo "$d: $name"
+done
+EOF
+# Deploy and run once
+sshpass scp /tmp/diagnose.sh deck@<DECK_IP>:/tmp/
+sshpass ssh deck@<DECK_IP> 'bash /tmp/diagnose.sh'
+```
+
+### Principle 3: Actors for Iterative Testing
+
+The deploy → restart → pair → check cycle is the biggest context consumer. Delegate it:
+
+```
+actor(general, prompt="""
+  Deploy the updated src/ files to the Deck at /tmp/sc2-spoof/src/
+  via sshpass -p '<DECK_PASSWORD>' scp.
+  Then:
+  1. Restart sc2-hogp on Deck
+  2. Run the pexpect auto-pair script
+  3. Check Deck logs for notifications sent
+  4. Check host for events on /dev/input/eventN
+  5. Report: did notifications arrive? did events appear?
+""")
+```
+
+The actor handles the entire cycle. You get back: "Notifications arrived at HCI. No events on eventN. Connection dropped after 1s." You decide the next move.
+
+### Principle 4: Research BlueZ Internals via Explore Actors
+
+When you need to understand how hog-ll processes notifications, don't read 500 lines of hog-lib.c yourself:
+
+```
+actor(explore, prompt="""
+  Read /tmp/bluez-src/profiles/input/hog-lib.c and
+  /tmp/bluez-src/src/shared/uhid.c.
+  Answer these specific questions:
+  1. What happens in report_value_cb() when a notification arrives?
+  2. How does bt_uhid_input() handle the 'number' parameter?
+  3. When is report->numbered set to true?
+  4. How does the uhid input queue work (uhid->input)?
+  5. When is the queue flushed?
+  Return only the answers, not the full source code.
+""")
+```
+
+### Principle 5: Separate Investigation from Implementation
+
+**Investigation phase** (use actors):
+- "Why does the host drop the connection after pairing?"
+- "What does BlueZ's hog-ll do when it receives an ATT notification?"
+- "Is the uhid device created before or after the Report Map is read?"
+
+**Implementation phase** (main thread):
+- Make the code change based on findings
+- Deploy and verify
+
+Don't mix these. If you're reading source code while also trying to edit files, you'll fill context with both.
+
+### Principle 6: Capture Only What You Need from SSH
+
+**Bad** — Dumping entire journal logs:
+```
+sshpass ssh deck@... "journalctl -u sc2-hogp --no-pager"
+# Returns 200 lines of ATT PDU traffic
+```
+
+**Good** — Filtering to what matters:
+```
+sshpass ssh deck@... "journalctl -u sc2-hogp --since '1 min ago' --no-pager | grep -i 'error\|notif\|disconnect\|test'"
+```
+
+**Better** — Actor handles it and returns summary:
+```
+actor(explore, prompt="SSH to deck@<DECK_IP> (password: <DECK_PASSWORD>) and check the last 2 minutes of sc2-hogp logs. Filter for errors, notifications, disconnections. Report only the key findings in 5 lines.")
+```
+
+### Principle 7: Host-Side Debugging Pattern
+
+For host BT debugging, the typical flow is:
+1. `bluetoothctl info C2:12:34:56:78:9A` — check connection state
+2. `journalctl | grep hog` — check BlueZ logs
+3. `btmon -t -w /tmp/capture.log &` — capture HCI traffic
+4. `evtest /dev/input/eventN` — check for input events
+
+Do steps 1-2 via actor. Step 3 requires root (use `printf '<HOST_SUDO_PASSWORD>\n' | sudo -S`). Step 4 needs the connection to be active — run it in parallel with the test, not after.
+
+### Principle 8: SSH Password Handling
+
+The Deck uses `sshpass -p '<DECK_PASSWORD>'`. The host uses sudo with password `<HOST_SUDO_PASSWORD>`. For repeated Deck operations, create a wrapper:
+
+```bash
+# On the host, create a helper function
+deck() {
+  sshpass -p '<DECK_PASSWORD>' ssh -o StrictHostKeyChecking=no deck@<DECK_IP> "$@"
+}
+deck_sudo() {
+  sshpass -p '<DECK_PASSWORD>' ssh -o StrictHostKeyChecking=no deck@<DECK_IP> "echo <DECK_PASSWORD> | sudo -S $*"
+}
+```
+
+### Principle 9: When You Must Do It in Main Thread
+
+Sometimes you can't delegate (e.g., making code changes, analyzing complex protocol interactions). In those cases:
+
+1. **Use `grep` over `read`** for finding specific patterns in large files
+2. **Read targeted sections** (use offset/limit) not full files
+3. **Summarize findings immediately** — don't leave large code blocks in context
+4. **Make the edit, deploy, then move on** — don't re-read the file you just edited
+
+### Principle 10: The Anti-Pattern Checklist
+
+Before starting work, check if you're about to:
+- [ ] Read 200+ lines of source code → **Spawn an explore actor**
+- [ ] Run 5+ SSH commands in sequence → **Write a script or use an actor**
+- [ ] Do an iterative deploy/test cycle → **Use an actor**
+- [ ] Analyze log output line-by-line → **Use an actor with grep filters**
+- [ ] Read the same file you read last session → **Check AGENTS.md first**
+
+If any box is checked, redirect to an actor.
+
+### Principle 11: Parallelism Without Stepping on Toes
+
+When spawning multiple background actors, you must prevent them from competing for shared resources. This project has several exclusive resources that can only be used by one agent at a time.
+
+#### Resource Classification
+
+| Resource | Type | Conflicts With | Safe to Parallel? |
+|----------|------|----------------|-------------------|
+| **Local files (read)** | Read-only | Nothing | ✅ Yes — multiple explore actors |
+| **Local files (write)** | Exclusive | Other writes to same file | ⚠️ Only if different files |
+| **Deck SSH session** | Exclusive | Other SSH to Deck | ❌ Serialize — one SSH at a time |
+| **Deck sc2-hogp service** | Exclusive | Restart/stop by another agent | ❌ Serialize — one lifecycle op at a time |
+| **Deck BT adapter config** | Exclusive | Other config_bt.py calls | ❌ Serialize — adapter state is global |
+| **Host bluetoothctl** | Exclusive | Other bluetoothctl instances | ❌ Serialize — one pairing at a time |
+| **Host btmon** | Exclusive | Other btmon instances | ❌ Serialize — one capture at a time |
+| **BLE connection** | Exclusive | Other connection attempts | ❌ Serialize — one connection at a time |
+| **Host /dev/hidrawN** | Exclusive | Other hidraw readers | ⚠️ Usually one reader |
+| **Host /dev/input/eventN** | Shared read | evtest while connection active | ✅ Read-only is fine |
+| **Already-captured logs** | Read-only | Nothing | ✅ Yes — multiple readers |
+
+#### The Rule: Check Before You Act
+
+Before spawning a parallel actor, ask:
+
+1. **Does it SSH to the Deck?** → Must not overlap with another Deck-SSH actor
+2. **Does it restart a service?** → Must be the only one doing lifecycle operations
+3. **Does it run bluetoothctl?** → Must be the only one pairing/connecting
+4. **Does it run btmon?** → Must be the only one capturing
+5. **Does it write to a file?** → Must not overlap with another writer to the same file
+
+#### Safe Parallel Patterns
+
+**✅ Safe — Multiple explore actors reading local files:**
+```
+actor(explore, prompt="Read /tmp/bluez-src/hog-lib.c and explain report_value_cb")
+actor(explore, prompt="Read /tmp/bluez-src/uhid.c and explain bt_uhid_input")
+# Both read local files, no conflict
+```
+
+**✅ Safe — One SSH actor + one local-file actor:**
+```
+actor(general, prompt="SSH to Deck, restart sc2-hogp, check logs")
+actor(explore, prompt="Read src/input_handler.py and explain the button mapping")
+# One touches Deck, other touches local files — no conflict
+```
+
+**❌ Unsafe — Two SSH actors in parallel:**
+```
+actor(general, prompt="SSH to Deck, restart sc2-hogp")
+actor(general, prompt="SSH to Deck, check logs")
+# Both try to SSH simultaneously — undefined behavior
+```
+
+**❌ Unsafe — btmon + pairing in parallel:**
+```
+actor(general, prompt="Run btmon to capture traffic")
+actor(general, prompt="Pair with the Deck via bluetoothctl")
+# btmon needs exclusive adapter access; pairing changes adapter state
+```
+
+#### Serialization Protocol
+
+When multiple actors need the same resource, serialize them:
+
+```
+# Step 1: Deploy code (exclusive Deck access)
+actor(general, prompt="Deploy updated src/ to Deck via scp")
+
+# Step 2: After Step 1 completes, restart service (exclusive Deck access)
+actor(general, prompt="Restart sc2-hogp on Deck, report logs")
+
+# Step 3: After Step 2 completes, pair (exclusive host BT access)
+actor(general, prompt="Pair with Deck via bluetoothctl, check result")
+
+# Step 4: After Step 3 completes, capture traffic (exclusive btmon access)
+actor(general, prompt="Run btmon, wait for notifications, report findings")
+```
+
+Use `actor(operation="wait", actor_id=...)` to block until the previous actor finishes before spawning the next one.
+
+#### The Quick Heuristic
+
+> **If two actors would both run `sshpass ssh deck@...` or both run `bluetoothctl`, they MUST NOT run in parallel.** Run them sequentially with `wait` between them.
+
+---
+
 ## Connection Details
 
 | Item | Value |
@@ -135,7 +389,7 @@ Make a **Steam Deck** present itself as a **Steam Controller 2026 (SC2)** over *
 | BT adapter address | `<DECK_BT_MAC_PUBLIC>` (public) |
 | Static BLE address | `C2:12:34:56:78:9A` |
 | Host PC BT adapter | `<HOST_BT_MAC>` (Qualcomm 4.2) |
-| Host sudo password | `\` (backslash) — for btmon |
+| Host sudo password | `<HOST_SUDO_PASSWORD>` — for btmon |
 
 ### SSH Tips
 ```bash
@@ -199,10 +453,16 @@ bluetoothctl info C2:12:34:56:78:9A
 - 16 advertising instances
 - Python 3.13.5, BlueZ 5.86, GLib 2.84.3
 
-### Controller Input
-- `event10` / `js0`: Virtual Xbox 360 pad (created by `hid-steam` driver)
-- Input handler reads from `/dev/input/event10`
-- Maps Xbox buttons → SC2 button bitmask
+### Controller Input (Neptune HID)
+- **Neptune controller**: VID=0x28DE, PID=0x1205, 3 hidraw interfaces
+- **Gamepad hidraw**: `/dev/hidraw3` (USB interface 2, input2 — identified by HID_PHYS containing 'input2')
+- **HID descriptor**: NO Report ID — raw 64 bytes per report
+- **Report type**: 0x09 (`ID_CONTROLLER_DECK_STATE`) — contains sticks, triggers, buttons, trackpads, IMU, force sensors
+- **Input handler** reads 64-byte Neptune reports → maps to 12-byte SC2 format → sends as ATT notifications
+- **Lizard mode**: `hid-steam` driver only generates evdev events when `gamepad_mode` is true (requires Steam running). Without Steam, controller is in lizard mode (buttons map to keyboard scancodes). Solution: read directly from hidraw.
+- **Lizard mode re-enables** every ~2 seconds; must re-send 0x81 (`ClearDigitalMappings`) command periodically via `os.write()`
+- **Feature report ioctl** `HIDIOCSFEATURE` returns EINVAL on hidraw — use `os.write()` for output reports instead
+- **Reference**: [InputPlumber](https://github.com/ShadowBlip/InputPlumber) — Neptune protocol documentation
 
 ---
 
@@ -287,6 +547,14 @@ Sticks, triggers, trackpads, IMU — see `docs/sc2-protocol.md` for full format.
 │   ├── main.py                  # DEPRECATED — uses BlueZ GATT (broken)
 │   └── gatt_app.py              # DEPRECATED — D-Bus GATT objects
 ├── scripts/
-│   └── setup.sh                 # Deck setup script
+│   ├── setup.sh                 # Deck setup script (first-time only)
+│   ├── deploy.sh                # Deploy source files + restart service
+│   ├── pair.py                  # Pexpect auto-pair (handles KDE dialog)
+│   ├── diagnose.sh              # Full Deck status diagnostic
+│   ├── connect_deck.py          # BLE connection (subprocess-based)
+│   ├── bt_agent_pty.py          # PTY-based bluetoothctl agent
+│   ├── bt_agent.py              # D-Bus agent
+│   ├── bt_remove.py             # Remove BT device
+│   └── config_bt.py             # Configure BT adapter
 └── tests/                       # Test scripts
 ```

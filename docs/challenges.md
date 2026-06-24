@@ -302,7 +302,10 @@ def Get(self, interface, prop):
 | 29 | GATT Handle Allocation Bug | SOLVED |
 | 30 | MTU Exchange Response Format Bug | SOLVED |
 | 31 | Connection Drops After Service Discovery | SOLVED |
-| 32 | Host hog-ll Drops Notifications | CURRENT BLOCKER |
+| 32 | Host hog-ll Drops Notifications | SOLVED |
+| 33 | Connection Drops After Pairing | SOLVED |
+| 34 | Physical Deck Input Not Working via evdev | SOLVED |
+| 35 | Feature Report ioctl EINVAL on hidraw | SOLVED |
 
 ---
 
@@ -543,44 +546,119 @@ Note: `BT_SECURITY` setsockopt is NOT supported on fixed-CID L2CAP sockets (retu
 
 ---
 
-## 32. Host hog-ll Drops Notifications (CURRENT BLOCKER)
+## 32. Host hog-ll Drops Notifications (SOLVED)
 
-**Problem**: The Deck's ATT server sends Handle Value Notifications (13 bytes: Report ID 0x01 + 12-byte HID report) on handle 0x0012. The host's HCI layer receives them (confirmed via btmon), but BlueZ's hog-ll driver silently drops them instead of forwarding to uhid/input. The host creates a `/dev/hidrawN` device and an `/dev/input/eventN` device with correct capabilities (gamepad: ABS_X/Y/Rx/Ry/Z/Rz, BTN_SOUTH etc.), but zero events arrive.
+**Problem**: The Deck's ATT server sends Handle Value Notifications on handle 0x0012. The host's HCI layer receives them (confirmed via btmon), but BlueZ's hog-ll driver silently drops them instead of forwarding to uhid/input.
 
-**Evidence**:
-- btmon on host confirms ATT notifications arrive at HCI level:
-  ```
-  ATT: Handle Value Notification (0x1b) len 14
-    Handle: 0x0012
-      Data: 010100000000000000000000
-  ```
-- Deck logs confirm notifications are sent with correct payload:
-  ```
-  [att] Notification sent: handle=0x0012 len=13 pdu_len=16 data=0101000000000000...
-  ```
-- Host `evtest /dev/input/event28` shows correct device capabilities but 0 events
-- Host `cat /dev/hidraw16` returns 0 bytes
-- BlueZ log shows one-time error from previous connection: `hog-lib.c:report_reference_cb() Malformed ATT read response` — but this was resolved in subsequent connections
+**Root cause**: Double Report ID prefix. Our code prepended Report ID (0x01) to notification data, making it 13 bytes. BlueZ's `report_value_cb()` strips the 3-byte ATT header, then calls `bt_uhid_input(uhid, report->numbered ? report->id : 0, pdu, len)`. When `numbered=true`, `bt_uhid_input` prepends the Report ID again (uhid.c:474), resulting in 14 bytes (double Report ID). The kernel's HID parser expects exactly 13 bytes (Report ID + 12-byte report), so the 14-byte event is silently dropped.
 
-**Root cause hypothesis**: BlueZ 5.72's hog-ll driver internally fails to route ATT notifications to the uhid device. Possible causes:
-1. Stale GATT cache from previous connections with different report format
-2. BlueZ's ATT client not properly registering notification callbacks for our raw L2CAP socket
-3. The hog-ll driver's internal state machine doesn't match our GATT profile layout
-4. `BT_SECURITY` socket option not supported on fixed-CID L2CAP sockets — security level unset
+**Fix applied**: Removed Report ID prefix from notifications in `main_l2cap.py:_on_input_report()`. Notifications now send raw 12-byte report data. BlueZ's hog-ll handles the Report ID via `report->id` from the Report Reference descriptor.
+
+**Verified**: Input events flow end-to-end from Deck to host `/dev/input/eventN`.
 
 **What works end-to-end**:
 ```
 Deck Xbox 360 pad (event10)
   → evdev → input_handler.py (12-byte report)
-  → main_l2cap.py (prepend Report ID 0x01)
-  → att_server.py send_notification(0x0012, 13 bytes)
-  → raw L2CAP socket → BLE → host HCI (btmon confirms)
-  → BlueZ hog-ll driver → ???
-  → uhid → /dev/input/event28 (0 events)
+  → main_l2cap.py (NO Report ID prefix)
+  → att_server.py send_notification(0x0012, 12 bytes)
+  → raw L2CAP socket → BLE → host HCI
+  → hog-ll report_value_cb → bt_uhid_input (prepends Report ID)
+  → uhid → /dev/input/eventN ✅
 ```
 
-**Next steps**:
-1. Run host `bluetoothd --debug` to see hog-ll internal state during notification
-2. Try `bluetoothctl remove` + `bluetoothctl pair` with completely fresh state
-3. Check if BlueZ's ATT client is properly registered for notifications on our socket
-4. Consider alternative: bypass hog-ll and write HID reports directly to uhid via kernel API
+---
+
+## 33. Connection Drops After Pairing (SOLVED)
+
+**Problem**: After pairing succeeds and services are resolved, the host resets the ATT connection within ~1 second. This prevents real controller input from being forwarded to uhid.
+
+**Root cause**: `bluetoothctl pair` tries **BR/EDR classic bonding** first (`type 0`), which fails with status 4 (Page Timeout) because the Deck only supports BLE. After the BR/EDR failure, BlueZ cancels the bonding and tears down the entire LE connection — including the working HOGP session.
+
+**Evidence** (from `bluetoothd -d -n` debug logs):
+```
+bonding_request_new() Requesting bonding for C2:12:34:56:78:9A
+adapter_bonding_attempt() hci0 bdaddr C2:12:34:56:78:9A type 0 io_cap 0x01  # type 0 = BR/EDR!
+connect_failed_callback() hci0 C2:12:34:56:78:9A status 4                    # Page Timeout
+adapter_cancel_bonding() hci0 bdaddr C2:12:34:56:78:9A type 2                 # Cancels LE bonding
+# → ALL profiles disconnect (batt, deviceinfo, gap, input-hog)
+```
+
+**Solution**: Use `bluetoothctl connect` instead of `bluetoothctl pair`. The LTK from previous pairing persists in BlueZ's storage, allowing re-connection without re-pairing. The `connect` command only establishes an LE connection and does not trigger BR/EDR bonding.
+
+**What works end-to-end** (after fix):
+```
+1. sshpass -p '<DECK_PASSWORD>' ssh deck@<DECK_IP> 'systemctl restart sc2-hogp'
+2. bluetoothctl scan on                    # Scans and discovers Deck
+3. bluetoothctl connect C2:12:34:56:78:9A  # LE connect only, no BR/EDR
+4. Host: /dev/hidrawN created, /dev/input/eventN with gamepad capabilities
+5. Deck inputs → BLE notifications → host hog-ll → uhid → input events ✅
+```
+
+---
+
+## 34. Physical Deck Input Not Working via evdev (SOLVED)
+
+**Problem**: The input handler reads from `/dev/input/event10` (Xbox 360 pad created by `hid-steam` driver), but no real input events arrive. The evdev node exists with correct gamepad capabilities (buttons, axes) but stays silent.
+
+**Root cause**: The `hid-steam` kernel driver only generates evdev events when `gamepad_mode` is true, which requires holding the Steam button. Without Steam running on the Deck, the controller is in **lizard mode** — buttons map to keyboard scancodes (A→Enter, B→Escape, etc.), not gamepad events. Lizard mode also re-enables every ~2 seconds, overriding any gamepad mode changes.
+
+**Solution**: Read directly from `/dev/hidraw3` (USB interface 2, input2). The Neptune controller sends 64-byte HID reports (type 0x09 = `ID_CONTROLLER_DECK_STATE`) containing all input data: buttons, sticks, triggers, trackpads, IMU, and force sensors.
+
+**Neptune HID Report Format** (type 0x09, 64 bytes):
+| Offset | Field |
+|--------|-------|
+| 0-3 | Header: `01 00 09 40` |
+| 4-7 | Frame counter (u32 LE) |
+| 8 | Buttons: A/X/B/Y/L1/R1/L2/R2 |
+| 9 | Buttons: L5/Menu/Steam/Options/Down/Left/Right/Up |
+| 10 | Buttons: L3/RPadTouch/LPadTouch/RPadPress/LPadPress/R5 |
+| 11 | Buttons: R3 |
+| 13 | Buttons: RStickTouch/LStickTouch/R4/L4 |
+| 14 | Buttons: QuickAccess |
+| 16-23 | Trackpads: LPadXY, RPadXY (i16 LE) |
+| 24-35 | IMU: accelXYZ, gyroXYZ (i16 LE) |
+| 44-47 | Triggers: L/R (u16 LE, 0..32767) |
+| 48-55 | Sticks: LX/LY/RX/RY (i16 LE, -32767..32767) |
+| 56-63 | Force: pad/stick capacitive touch |
+
+**Button mapping** (Neptune → SC2 12-byte report):
+| Neptune | SC2 bitmask |
+|---------|-------------|
+| byte8 bit0 (A) | 0x0001 (BTN_SOUTH) |
+| byte8 bit2 (B) | 0x0002 (BTN_EAST) |
+| byte8 bit1 (X) | 0x0004 (BTN_NORTH) |
+| byte8 bit3 (Y) | 0x0008 (BTN_WEST) |
+| byte8 bit4 (L1) | 0x0010 (BTN_TL) |
+| byte8 bit5 (R1) | 0x0020 (BTN_TR) |
+| byte9 bit1 (Menu) | 0x0040 (BTN_SELECT) |
+| byte9 bit3 (Options) | 0x0080 (BTN_START) |
+| byte9 bit2 (Steam) | 0x0100 (BTN_MODE) |
+| byte10 bit1 (L3) | 0x0200 (BTN_THUMBL) |
+| byte11 bit5 (R3) | 0x0400 (BTN_THUMBR) |
+| byte9 bit7 (Up) | 0x0800 (DPAD_UP) |
+| byte9 bit4 (Down) | 0x1000 (DPAD_DOWN) |
+| byte9 bit5 (Left) | 0x2000 (DPAD_LEFT) |
+| byte9 bit6 (Right) | 0x4000 (DPAD_RIGHT) |
+
+Sticks: direct copy (same format). Triggers: `>> 7` to scale from 16-bit to 8-bit.
+
+**Lizard mode OFF commands** (output report via `os.write()`):
+1. `[0x01, 0x00, 0x81] + [0]*61` — ClearDigitalMappings
+2. `[0x01, 0x00, 0x87, 0x03, 0x08, 0x07, 0x00] + [0]*57` — disable left trackpad mouse
+3. `[0x01, 0x00, 0x87, 0x03, 0x15, 0x00, 0x00] + [0]*57` — disable smooth mouse
+4. Re-send 0x81 every ~2 seconds
+
+**Reference**: [InputPlumber](https://github.com/ShadowBlip/InputPlumber) — Neptune protocol documentation
+
+---
+
+## 35. Feature Report ioctl EINVAL on hidraw (SOLVED)
+
+**Problem**: `ioctl(fd, HIDIOCSFEATURE, ...)` returns `EINVAL` when writing output/feature reports to Neptune's hidraw device.
+
+**Solution**: Use `os.write(fd, report_data)` to send output reports instead of ioctl. The hidraw device accepts raw output reports via the write syscall.
+
+---
+
+## Summary of Blockers

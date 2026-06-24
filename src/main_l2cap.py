@@ -94,6 +94,7 @@ class HoGPeripheral:
         self.att_server = AttServer(self.gatt_db, mtu=517)
         self.att_server._on_connection = self._on_att_connection
         self.att_server._on_disconnection = self._on_att_disconnection
+        self.att_server._on_cccd_enabled = self._on_cccd_enabled
 
     def _find_report_handle(self):
         """Find the handle of the Report characteristic for input notifications."""
@@ -118,9 +119,32 @@ class HoGPeripheral:
     def _on_att_connection(self, addr):
         print(f"[+] ATT connection established from {addr}")
 
+    def _on_cccd_enabled(self, handle):
+        """Start periodic test notifications when CCCD is enabled for input reports."""
+        if handle == self._report_handle and self.att_server:
+            import threading, time, struct
+            def _send_periodic():
+                time.sleep(1)
+                for i in range(10):
+                    if not self.att_server.connected:
+                        break
+                    # Alternate between button press and stick move
+                    if i % 2 == 0:
+                        report = bytearray(12)
+                        report[0] = 0x01  # BTN_SOUTH
+                        self.att_server.send_notification(self._report_handle, bytes(report))
+                        print(f"[+] Test {i}: BTN_SOUTH press")
+                    else:
+                        report = bytearray(12)
+                        struct.pack_into('<h', report, 2, 10000)  # LX
+                        self.att_server.send_notification(self._report_handle, bytes(report))
+                        print(f"[+] Test {i}: LX=10000")
+                    time.sleep(0.5)
+                print(f"[+] Test notifications complete")
+            threading.Thread(target=_send_periodic, daemon=True).start()
+
     def _on_att_disconnection(self, addr):
         print(f"[+] ATT connection lost from {addr}")
-        # Restart advertising after disconnect
         self._schedule_adv_refresh()
 
     def _schedule_adv_refresh(self):
@@ -186,8 +210,7 @@ class HoGPeripheral:
     def _on_input_report(self, report_bytes):
         """Called when a new SC2 input report is ready. Send as BLE notification."""
         if self.att_server and self.att_server.connected and self._report_handle:
-            notification = bytes([0x01]) + report_bytes
-            self.att_server.send_notification(self._report_handle, notification)
+            self.att_server.send_notification(self._report_handle, report_bytes)
         else:
             print(f"[input] Skipped: connected={self.att_server.connected if self.att_server else None} handle={self._report_handle}")
 
@@ -261,7 +284,7 @@ def main():
     parser.add_argument(
         "--device",
         default=None,
-        help="Input device path (e.g., /dev/input/event10). Auto-detect if not specified.",
+        help="Input device path (/dev/hidrawN for Neptune, /dev/input/eventN for evdev). Auto-detect if not specified.",
     )
     parser.add_argument(
         "--info",
