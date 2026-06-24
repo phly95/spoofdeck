@@ -4,7 +4,7 @@ Make a Steam Deck present itself as a Steam Controller 2026 over Bluetooth Low E
 
 ## Current Status
 
-**Working (Raw L2CAP ATT Server)** — The Deck runs a raw L2CAP ATT server on CID 4, bypassing BlueZ's buggy GATT server. MTU exchange and service discovery succeed. The host sees `ServicesResolved: yes` with all 5 GATT services. Pairing works via auto-confirm Agent1. Next step: complete the full HOGP connection lifecycle (characteristic reads + CCCD enable → `/dev/hidraw`).
+**HOGP Lifecycle Complete, Notifications Arriving at Host** — The Deck runs a raw L2CAP ATT server on CID 4, bypassing BlueZ's buggy GATT server. MTU exchange, service discovery, characteristic discovery, CCCD enable, and input report notifications all work. The host creates `/dev/hidrawN` and an input device (`/dev/input/eventN`). ATT notifications with 13-byte HID reports (Report ID + 12-byte data) arrive at the host's HCI layer (confirmed via btmon). However, the host's BlueZ hog-ll driver silently drops the notifications instead of forwarding them to uhid — a BlueZ-side issue requiring further investigation.
 
 ## Architecture
 
@@ -121,9 +121,8 @@ steamdeck-sc2-spoof/
 
 ## Known Issues
 
-1. Connection drops after service discovery (~26s timeout) — SMP pairing timing
-2. No `/dev/hidraw` yet — full HOGP lifecycle not completed
-3. Host shows KDE pairing dialog — auto-confirm works but user must click "yes"
+1. **hog-ll driver drops notifications** — Host receives ATT notifications (confirmed via btmon) but BlueZ's hog-ll driver doesn't forward them to uhid/input. Likely a BlueZ 5.72 bug with our GATT profile layout.
+2. **Host shows KDE pairing dialog** — Auto-confirm works on Deck side but host user must click "yes"
 
 ## Acknowledgments
 

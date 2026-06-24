@@ -67,35 +67,23 @@ Make a **Steam Deck** present itself as a **Steam Controller 2026 (SC2)** over *
 - Raw L2CAP ATT server accepts connections on CID 4
 - MTU exchange succeeds (negotiated 517)
 - Service discovery succeeds (5 services, 34 attributes)
-- Host sees `ServicesResolved: yes` and `Icon: input-gaming`
+- Characteristic discovery succeeds (12 characteristics found)
+- Descriptor discovery succeeds (CCCDs, Report References)
+- Host reads HID Information, Report Map, PnP ID, Battery Level
+- Host writes CCCD to enable notifications on Report/Input (0x0012)
+- `/dev/hidrawN` created on host
+- Host creates `/dev/input/eventN` with correct gamepad capabilities
 - SMP pairing works (auto-confirm via Agent1 D-Bus interface)
-- Connection is stable (10+ seconds)
+- Input handler reads Deck Xbox 360 pad and produces 12-byte HID reports
+- ATT notifications (13 bytes: Report ID + report) sent and arrive at host HCI (confirmed via btmon)
 
 **❌ Not Yet Working:**
-- Connection drops after service discovery (~26s timeout) — likely SMP pairing timing or missing characteristic reads
-- No `/dev/hidraw` created — full HOGP lifecycle not completed
-- No input forwarding — needs hidraw first
+- Host's BlueZ hog-ll driver drops notifications — doesn't forward to uhid/input
+- Zero events arrive at `/dev/input/eventN` on host
 
-### What Needs to Happen Next (In Order)
+### What Needs to Happen Next
 
-1. **Fix connection lifecycle** — After service discovery, the host needs to:
-   - Read HID Information characteristic
-   - Read Report Map characteristic  
-   - Read Battery Level characteristic
-   - Read PnP ID characteristic
-   - Write to HID Control Point (enable notifications)
-   - Write to CCCD on Report characteristic (enable input reports)
-   - Then hog-ll driver creates `/dev/hidrawN`
-
-2. **Add missing ATT handlers** — `att_server.py` needs:
-   - `Read By Type` for characteristic discovery (UUID `0x2803`)
-   - `Find Information` for descriptor discovery
-   - `Read Blob` for Report Map (long read, >200 bytes)
-   - `Write Request` for CCCD enable
-
-3. **Test input forwarding** — Once hidraw appears, verify BLE notifications carry Deck controller inputs
-
-4. **Integrate Valve Service** — Add SC2 custom GATT service (`100F6C32-...`)
+1. **Fix hog-ll notification forwarding** — BlueZ 5.72 on the host receives ATT notifications at HCI level but silently drops them. Investigate with `bluetoothd --debug` on host, try fresh pairing, check if BlueZ's ATT client properly routes notifications from our raw L2CAP socket.
 
 ### Files You Must Read Before Making Changes
 

@@ -45,16 +45,16 @@ Host sends ATT PDU → Kernel L2CAP → Our raw socket (CID 4) → _handle_pdu()
 | 0x000B | 0x2803 | HID Information Characteristic |
 | 0x000C | 0x2A4A | HID Information Value |
 | 0x000D | 0x2803 | Report Map Characteristic |
-| 0x000E | 0x2A4B | Report Map Value (210 bytes) |
+| 0x000E | 0x2A4B | Report Map Value (77 bytes) |
 | 0x000F | 0x2803 | HID Control Point Characteristic |
 | 0x0010 | 0x2A4C | HID Control Point Value |
 | 0x0011 | 0x2803 | Report (Input) Characteristic |
-| 0x0012 | 0x2A4D | Report (Input) Value |
-| 0x0013 | 0x2908 | Report Reference (Input) |
+| 0x0012 | 0x2A4D | Report (Input) Value (12 bytes) |
+| 0x0013 | 0x2908 | Report Reference (Input, ID=1) |
 | 0x0014 | 0x2902 | Report (Input) CCCD |
 | 0x0015 | 0x2803 | Report (Output) Characteristic |
-| 0x0016 | 0x2A4D | Report (Output) Value |
-| 0x0017 | 0x2908 | Report Reference (Output) |
+| 0x0016 | 0x2A4D | Report (Output) Value (1 byte) |
+| 0x0017 | 0x2908 | Report Reference (Output, ID=2) |
 | 0x0018 | 0x2800 | Battery Service Declaration |
 | 0x0019 | 0x2803 | Battery Level Characteristic |
 | 0x001A | 0x2A19 | Battery Level Value |
@@ -90,10 +90,24 @@ When the host writes `[0x01, 0x00]` to a CCCD, the server adds that handle's par
 ### Report Map
 
 The HID Report Map descriptor defines the input report format. For a gamepad:
-- 16 buttons (2 bytes)
-- 4 axes X/Y/Rx/Ry (4 × 16-bit signed)
-- 2 triggers Z/Rz (2 × 8-bit unsigned)
-- Total: 12 bytes per report
+- Report ID 1 (Input): 16 buttons (2 bytes), 4 axes X/Y/Rx/Ry (4 × 16-bit signed), 2 triggers Z/Rz (2 × 8-bit unsigned) = 12 bytes
+- Report ID 2 (Output): 1 byte vendor data
+
+The Report ID 2 (Output) exists solely to make BlueZ's hog-ll driver set `num_reports > 1`, which causes it to expect the Report ID as the first byte of ATT notifications.
+
+### Input Report Format (13 bytes on wire)
+
+ATT notifications include the Report ID prefix when `num_reports > 1`:
+```
+Byte 0:     Report ID (0x01)
+Bytes 1-2:  16 buttons (1 bit each, LE)
+Bytes 3-4:  X axis (signed 16-bit LE)
+Bytes 5-6:  Y axis (signed 16-bit LE)
+Bytes 7-8:  Rx axis (signed 16-bit LE)
+Bytes 9-10: Ry axis (signed 16-bit LE)
+Byte 11:    Z trigger (unsigned 8-bit)
+Byte 12:    Rz trigger (unsigned 8-bit)
+```
 
 ### Long Read (Read Blob)
 

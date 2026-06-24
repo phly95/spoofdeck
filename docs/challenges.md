@@ -259,7 +259,7 @@ def Get(self, interface, prop):
 
 ---
 
-## 17. GATT Service Connection Stability (IN PROGRESS)
+## 17. GATT Service Connection Stability (SOLVED)
 
 **Problem**: The host PC successfully pairs and connects over LE, but the connection drops immediately (`Connected: no`), preventing the host from resolving GATT services (`ServicesResolved: no`) and creating the virtual gamepad `/dev/hidraw` node. BlueZ daemon on the Deck logs `Failed to set mode: Invalid Parameters` and `Failed to add advertisement: Rejected (0x0b)`.
 
@@ -287,7 +287,7 @@ def Get(self, interface, prop):
 | 14 | Properties.Get missing | SOLVED |
 | 15 | Headless pairing prompt | SOLVED |
 | 16 | Wrong Link Type (-22) | SOLVED |
-| 17 | GATT Connection Drops | IN PROGRESS |
+| 17 | GATT Connection Drops | SOLVED |
 | 18 | Gio.DBusConnection GATT Registration Fails | SOLVED |
 | 19 | ControllerMode=le Not Supported | SOLVED |
 | 20 | Discoverable Property No Advertising in LE-only | SOLVED |
@@ -302,6 +302,7 @@ def Get(self, interface, prop):
 | 29 | GATT Handle Allocation Bug | SOLVED |
 | 30 | MTU Exchange Response Format Bug | SOLVED |
 | 31 | Connection Drops After Service Discovery | SOLVED |
+| 32 | Host hog-ll Drops Notifications | CURRENT BLOCKER |
 
 ---
 
@@ -345,7 +346,7 @@ class GattService(dbus.service.Object):
 
 ---
 
-## 20. Discoverable Property No Advertising in LE-only Mode (NEW BLOCKER)
+## 20. Discoverable Property No Advertising in LE-only Mode (SOLVED)
 
 **Problem**: When the adapter is in LE-only mode (`bredr off`), setting the `Discoverable` property to `true` does NOT trigger BLE advertising. The adapter does not send any advertising PDUs.
 
@@ -383,7 +384,7 @@ The custom advertisement must use legacy advertising (BLE 4.2 compatible) for th
 - Report Map (0x2A4B): Minimal gamepad descriptor (16 buttons, 4 axes, 2 triggers)
 - HID Control Point (0x2A4C): write-without-response
 - Report Input (0x2A4D): notify + read, with Report Reference descriptor (ReportID=1, Type=Input)
-- Report Output (0x2A4D): write + read + notify, with Report Reference descriptor (ReportID=0, Type=Output)
+- Report Output (0x2A4D): write + read, with Report Reference descriptor (ReportID=2, Type=Output)
 
 ---
 
@@ -516,10 +517,6 @@ SOL_BLUETOOTH = 274
 BT_SECURITY = 4
 BT_SECURITY_LOW = 1
 
-# Security level (correct struct format)
-btsec = struct.pack('BB', BT_SECURITY_LOW, 0)
-self.conn.setsockopt(SOL_BLUETOOTH, BT_SECURITY, btsec)
-
 # Error response (correct 5-byte format)
 resp = struct.pack('<BBHB', ATT_OP_ERROR, request_opcode, handle, error_code)
 
@@ -533,6 +530,8 @@ def _find_cccd_value_handle(self, cccd_handle):
     return None
 ```
 
+Note: `BT_SECURITY` setsockopt is NOT supported on fixed-CID L2CAP sockets (returns EINVAL). SMP pairing is handled separately by the kernel on CID 6.
+
 **Evidence of fix**:
 - Host now sends ReadByType for 0x2803 (characteristic discovery) — 12 characteristics found
 - Host discovers all descriptors via FindInformation
@@ -541,3 +540,47 @@ def _find_cccd_value_handle(self, cccd_handle):
 - `/dev/hidraw16` created on host
 - `ServicesResolved: yes`, `Paired: yes`, `Connected: yes`
 - `Icon: input-gaming`, `Modalias: bluetooth:v28DEp0303d0100`
+
+---
+
+## 32. Host hog-ll Drops Notifications (CURRENT BLOCKER)
+
+**Problem**: The Deck's ATT server sends Handle Value Notifications (13 bytes: Report ID 0x01 + 12-byte HID report) on handle 0x0012. The host's HCI layer receives them (confirmed via btmon), but BlueZ's hog-ll driver silently drops them instead of forwarding to uhid/input. The host creates a `/dev/hidrawN` device and an `/dev/input/eventN` device with correct capabilities (gamepad: ABS_X/Y/Rx/Ry/Z/Rz, BTN_SOUTH etc.), but zero events arrive.
+
+**Evidence**:
+- btmon on host confirms ATT notifications arrive at HCI level:
+  ```
+  ATT: Handle Value Notification (0x1b) len 14
+    Handle: 0x0012
+      Data: 010100000000000000000000
+  ```
+- Deck logs confirm notifications are sent with correct payload:
+  ```
+  [att] Notification sent: handle=0x0012 len=13 pdu_len=16 data=0101000000000000...
+  ```
+- Host `evtest /dev/input/event28` shows correct device capabilities but 0 events
+- Host `cat /dev/hidraw16` returns 0 bytes
+- BlueZ log shows one-time error from previous connection: `hog-lib.c:report_reference_cb() Malformed ATT read response` — but this was resolved in subsequent connections
+
+**Root cause hypothesis**: BlueZ 5.72's hog-ll driver internally fails to route ATT notifications to the uhid device. Possible causes:
+1. Stale GATT cache from previous connections with different report format
+2. BlueZ's ATT client not properly registering notification callbacks for our raw L2CAP socket
+3. The hog-ll driver's internal state machine doesn't match our GATT profile layout
+4. `BT_SECURITY` socket option not supported on fixed-CID L2CAP sockets — security level unset
+
+**What works end-to-end**:
+```
+Deck Xbox 360 pad (event10)
+  → evdev → input_handler.py (12-byte report)
+  → main_l2cap.py (prepend Report ID 0x01)
+  → att_server.py send_notification(0x0012, 13 bytes)
+  → raw L2CAP socket → BLE → host HCI (btmon confirms)
+  → BlueZ hog-ll driver → ???
+  → uhid → /dev/input/event28 (0 events)
+```
+
+**Next steps**:
+1. Run host `bluetoothd --debug` to see hog-ll internal state during notification
+2. Try `bluetoothctl remove` + `bluetoothctl pair` with completely fresh state
+3. Check if BlueZ's ATT client is properly registered for notifications on our socket
+4. Consider alternative: bypass hog-ll and write HID reports directly to uhid via kernel API
