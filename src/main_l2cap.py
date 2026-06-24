@@ -186,7 +186,10 @@ class HoGPeripheral:
     def _on_input_report(self, report_bytes):
         """Called when a new SC2 input report is ready. Send as BLE notification."""
         if self.att_server and self.att_server.connected and self._report_handle:
-            self.att_server.send_notification(self._report_handle, report_bytes)
+            notification = bytes([0x01]) + report_bytes
+            self.att_server.send_notification(self._report_handle, notification)
+        else:
+            print(f"[input] Skipped: connected={self.att_server.connected if self.att_server else None} handle={self._report_handle}")
 
     def run(self):
         """Run the main event loop."""

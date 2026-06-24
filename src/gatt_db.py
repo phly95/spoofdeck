@@ -281,6 +281,13 @@ class GattDatabase:
             0x75, 0x08,        #   Report Size (8)
             0x95, 0x02,        #   Report Count (2)
             0x81, 0x02,        #   Input (Data,Var,Abs)
+            0x85, 0x02,        #   Report ID (2)
+            0x09, 0x20,        #   Usage (Survey)
+            0x15, 0x00,        #   Logical Minimum (0)
+            0x26, 0xFF, 0x00,  #   Logical Maximum (255)
+            0x75, 0x08,        #   Report Size (8)
+            0x95, 0x01,        #   Report Count (1)
+            0x91, 0x02,        #   Output (Data,Var,Abs)
             0xC0,              # End Collection
         ])
 
@@ -315,12 +322,12 @@ def build_sc2_database(device_name="Steam Controller 2026"):
         (CHR_HID_INFO, ATT_PROP_READ, hid_info),
         (CHR_REPORT_MAP, ATT_PROP_READ, report_map),
         (CHR_HID_CONTROL_POINT, ATT_PROP_WRITE_NO_RSP, b'\x00'),
-        (CHR_REPORT, ATT_PROP_READ | ATT_PROP_NOTIFY, b'\x00' * 13, [
+        (CHR_REPORT, ATT_PROP_READ | ATT_PROP_NOTIFY, b'\x00' * 12, [
             (DESC_REPORT_REF, bytes([0x01, 0x01])),  # Report ID 1, Input
             (DESC_CCCD, b'\x00\x00'),
         ]),
-        (CHR_REPORT, ATT_PROP_READ | ATT_PROP_WRITE | ATT_PROP_WRITE_NO_RSP, b'\x00', [
-            (DESC_REPORT_REF, bytes([0x00, 0x02])),  # Report ID 0, Output
+        (CHR_REPORT, ATT_PROP_READ | ATT_PROP_WRITE_NO_RSP, b'\x00', [
+            (DESC_REPORT_REF, bytes([0x02, 0x02])),  # Report ID 2, Output
         ]),
     ])
 

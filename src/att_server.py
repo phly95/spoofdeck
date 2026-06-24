@@ -81,13 +81,8 @@ class AttServer:
         self.conn, self.conn_addr = self.sock.accept()
         print(f"[att] Client connected: {self.conn_addr}")
 
-        # Set security level to allow pairing
-        try:
-            btsec = struct.pack('BB', BT_SECURITY_LOW, 0)
-            self.conn.setsockopt(SOL_BLUETOOTH, BT_SECURITY, btsec)
-        except Exception as e:
-            print(f"[att] Warning: could not set security: {e}")
-
+        # Note: BT_SECURITY setsockopt is not supported on fixed-CID L2CAP
+        # sockets (CID 4). SMP pairing is handled by the kernel on CID 6.
         if self._on_connection:
             self._on_connection(self.conn_addr)
 
@@ -297,9 +292,11 @@ class AttServer:
 
         value = self.db.read_attribute(handle)
         if value is None:
+            print(f"[att] Read FAILED: handle=0x{handle:04x} -> ERR_INVALID_HANDLE")
             self._send_error(opcode, handle, ATT_ERR_INVALID_HANDLE)
             return
 
+        print(f"[att] Read: handle=0x{handle:04x} len={len(value)} data={value.hex()}")
         resp = struct.pack('B', ATT_OP_READ_RSP) + value
         self._send(resp)
 
@@ -345,8 +342,9 @@ class AttServer:
             self._send_error(opcode, handle, ATT_ERR_INVALID_HANDLE)
             return
 
-        # Check if this is a CCCD write (enabling notifications)
-        if attr.uuid == uuid16_to_bytes(0x2902):
+        print(f"[att] Write: handle=0x{handle:04x} uuid={attr.uuid.hex()} len={len(value)} data={value.hex()}")
+        cccd_uuid = uuid16_to_bytes(0x2902)
+        if attr.uuid == cccd_uuid:
             ccc_value = struct.unpack('<H', value[:2])[0] if len(value) >= 2 else 0
             value_handle = self._find_cccd_value_handle(handle)
             if value_handle is not None:
@@ -382,9 +380,12 @@ class AttServer:
         """Send raw bytes to the connected client."""
         if self.conn:
             try:
-                self.conn.send(data)
+                sent = self.conn.send(data)
+                return sent
             except Exception as e:
                 print(f"[att] Send error: {e}")
+                return 0
+        return 0
 
     def send_notification(self, handle, value):
         """
@@ -398,7 +399,8 @@ class AttServer:
             return  # Notifications not enabled for this handle
 
         pdu = struct.pack('<BH', ATT_OP_HANDLE_NFY, handle) + value
-        self._send(pdu)
+        sent = self._send(pdu)
+        print(f"[att] Notification sent: handle=0x{handle:04x} len={len(value)} pdu_len={sent} data={value[:8].hex()}...")
 
     @property
     def connected(self):

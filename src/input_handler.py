@@ -37,42 +37,26 @@ except ImportError:
     HAS_EVDEV = False
 
 
-# SC2 Button bitmask (32-bit)
-SC2_BUTTON_A         = 0x00000001
-SC2_BUTTON_B         = 0x00000002
-SC2_BUTTON_X         = 0x00000004
-SC2_BUTTON_Y         = 0x00000008
-SC2_BUTTON_LB        = 0x00000010
-SC2_BUTTON_RB        = 0x00000020
-SC2_BUTTON_LGRIP     = 0x00000040
-SC2_BUTTON_RGRIP     = 0x00000080
-SC2_BUTTON_START     = 0x00000100
-SC2_BUTTON_STEAM     = 0x00000200
-SC2_BUTTON_LPAD_CLICK = 0x00000400
-SC2_BUTTON_RPAD_CLICK = 0x00000800
-SC2_BUTTON_LSTICK    = 0x00001000
-SC2_BUTTON_RSTICK    = 0x00002000
-SC2_BUTTON_DPAD_UP   = 0x00004000
-SC2_BUTTON_DPAD_DOWN = 0x00008000
-SC2_BUTTON_DPAD_LEFT = 0x00010000
-SC2_BUTTON_DPAD_RIGHT = 0x00020000
-SC2_BUTTON_LPAD_TOUCH = 0x00400000
-SC2_BUTTON_RPAD_TOUCH = 0x00800000
-
-# Xbox 360 → SC2 button mapping
+# Xbox 360 → SC2 button mapping (packed into 16-bit bitmask for HID report)
 XBOX_TO_SC2_BUTTON = {
-    ecodes.BTN_SOUTH:  SC2_BUTTON_A,           # A
-    ecodes.BTN_EAST:   SC2_BUTTON_B,           # B
-    ecodes.BTN_NORTH:  SC2_BUTTON_X,           # X
-    ecodes.BTN_WEST:   SC2_BUTTON_Y,           # Y
-    ecodes.BTN_TL:     SC2_BUTTON_LB,          # Left Bumper
-    ecodes.BTN_TR:     SC2_BUTTON_RB,          # Right Bumper
-    ecodes.BTN_SELECT: SC2_BUTTON_START,       # Start (mapped from Select)
-    ecodes.BTN_START:  SC2_BUTTON_STEAM,       # Steam (mapped from Start)
-    ecodes.BTN_MODE:   SC2_BUTTON_STEAM,       # Guide → Steam
-    ecodes.BTN_THUMBL: SC2_BUTTON_LSTICK,      # Left Stick Click
-    ecodes.BTN_THUMBR: SC2_BUTTON_RSTICK,      # Right Stick Click
+    ecodes.BTN_SOUTH:  0x0001,  # Bit 0: A
+    ecodes.BTN_EAST:   0x0002,  # Bit 1: B
+    ecodes.BTN_NORTH:  0x0004,  # Bit 2: X
+    ecodes.BTN_WEST:   0x0008,  # Bit 3: Y
+    ecodes.BTN_TL:     0x0010,  # Bit 4: Left Bumper
+    ecodes.BTN_TR:     0x0020,  # Bit 5: Right Bumper
+    ecodes.BTN_SELECT: 0x0040,  # Bit 6: Back
+    ecodes.BTN_START:  0x0080,  # Bit 7: Start
+    ecodes.BTN_MODE:   0x0100,  # Bit 8: Guide/Steam
+    ecodes.BTN_THUMBL: 0x0200,  # Bit 9: Left Stick Click
+    ecodes.BTN_THUMBR: 0x0400,  # Bit 10: Right Stick Click
 }
+
+# D-pad as extra button bits (encoded from HAT0X/HAT0Y axis events)
+DPAD_UP    = 0x0800  # Bit 11
+DPAD_DOWN  = 0x1000  # Bit 12
+DPAD_LEFT  = 0x2000  # Bit 13
+DPAD_RIGHT = 0x4000  # Bit 14
 
 # evdev axis codes
 ABS_X = 0
@@ -86,10 +70,19 @@ ABS_HAT0Y = 17
 
 
 class SC2InputReport:
-    """Builds SC2-format input reports (Report ID 0x45)."""
+    """Builds HID-format input reports matching the Report Map.
+
+    Report Map layout (12 bytes, Report ID 1):
+      Bytes 0-1: 16 buttons (1 bit each, LE)
+      Bytes 2-3: X axis (signed 16-bit LE)
+      Bytes 4-5: Y axis (signed 16-bit LE)
+      Bytes 6-7: Rx axis (signed 16-bit LE)
+      Bytes 8-9: Ry axis (signed 16-bit LE)
+      Byte 10:   Z trigger (unsigned 8-bit)
+      Byte 11:   Rz trigger (unsigned 8-bit)
+    """
 
     def __init__(self):
-        self.seq = 0
         self.buttons = 0
         self.left_trigger = 0
         self.right_trigger = 0
@@ -97,39 +90,24 @@ class SC2InputReport:
         self.ly = 0
         self.rx = 0
         self.ry = 0
-        self.lpad_x = 0
-        self.lpad_y = 0
-        self.rpad_x = 0
-        self.rpad_y = 0
 
     def to_bytes(self):
-        """Convert to 48-byte report."""
-        report = bytearray(48)
-        report[0] = 0x45  # Report ID
-        report[1] = self.seq & 0xFF  # Sequence number
+        """Convert to 12-byte HID report matching Report Map."""
+        report = bytearray(12)
 
-        # Buttons (32-bit LE)
-        struct.pack_into("<I", report, 2, self.buttons)
-
-        # Triggers
-        report[6] = self.left_trigger
-        report[7] = self.right_trigger
+        # Buttons (16-bit LE, packed as 16 x 1-bit)
+        struct.pack_into("<H", report, 0, self.buttons & 0xFFFF)
 
         # Sticks (signed 16-bit LE)
-        struct.pack_into("<h", report, 8, self.lx)
-        struct.pack_into("<h", report, 10, self.ly)
-        struct.pack_into("<h", report, 12, self.rx)
-        struct.pack_into("<h", report, 14, self.ry)
+        struct.pack_into("<h", report, 2, self.lx)
+        struct.pack_into("<h", report, 4, self.ly)
+        struct.pack_into("<h", report, 6, self.rx)
+        struct.pack_into("<h", report, 8, self.ry)
 
-        # Trackpads (mapped from sticks when no trackpad present)
-        struct.pack_into("<h", report, 16, self.lpad_x)
-        struct.pack_into("<h", report, 18, self.lpad_y)
-        struct.pack_into("<h", report, 20, self.rpad_x)
-        struct.pack_into("<h", report, 22, self.rpad_y)
+        # Triggers (unsigned 8-bit)
+        report[10] = self.left_trigger
+        report[11] = self.right_trigger
 
-        # IMU data left as zeros (no IMU forwarding yet)
-
-        self.seq = (self.seq + 1) & 0xFF
         return bytes(report)
 
 
@@ -152,6 +130,7 @@ class InputHandler:
         self._thread = None
         self._running = False
         self._dirty = False
+        self._absinfo = {}  # cached absinfo dict: code -> absinfo
 
     def find_xbox_device(self):
         """Auto-detect Xbox 360 controller device."""
@@ -203,6 +182,7 @@ class InputHandler:
                 return
 
         self._running = True
+        self._absinfo = dict(self.device.capabilities(verbose=False).get(ecodes.EV_ABS, []))
         self._thread = threading.Thread(target=self._read_loop, daemon=True)
         self._thread.start()
         print("[+] Input handler started")
@@ -219,13 +199,16 @@ class InputHandler:
     def _read_loop(self):
         """Main input reading loop."""
         try:
-            for event in self.device.read_loop():
-                if not self._running:
-                    break
-                self._handle_event(event)
+            import select
+            print(f"[input] Read loop started on {self.device.path}")
+            while self._running:
+                r, _, _ = select.select([self.device.fd], [], [], 1.0)
+                if r:
+                    for event in self.device.read_loop():
+                        self._handle_event(event)
         except Exception as e:
             if self._running:
-                print(f"[-] Input read error: {e}")
+                print(f"[-] Input read error: {type(e).__name__}: {e}")
 
     def _handle_event(self, event):
         """Process a single input event."""
@@ -240,40 +223,37 @@ class InputHandler:
         value = event.value
 
         if code == ABS_X:
-            # Left stick X: normalize from device range to -32768..32767
-            self.report.lx = self._normalize_stick(value, self.device.capabilities(verbose=False).get(ecodes.EV_ABS, {}).get(code))
+            self.report.lx = self._normalize_stick(value, self._get_absinfo(code))
         elif code == ABS_Y:
-            self.report.ly = self._normalize_stick(value, self.device.capabilities(verbose=False).get(ecodes.EV_ABS, {}).get(code))
+            self.report.ly = self._normalize_stick(value, self._get_absinfo(code))
         elif code == ABS_RX:
-            self.report.rx = self._normalize_stick(value, self.device.capabilities(verbose=False).get(ecodes.EV_ABS, {}).get(code))
+            self.report.rx = self._normalize_stick(value, self._get_absinfo(code))
         elif code == ABS_RY:
-            self.report.ry = self._normalize_stick(value, self.device.capabilities(verbose=False).get(ecodes.EV_ABS, {}).get(code))
+            self.report.ry = self._normalize_stick(value, self._get_absinfo(code))
         elif code == ABS_Z:
-            # Left trigger
-            self.report.left_trigger = self._normalize_trigger(value, self.device.capabilities(verbose=False).get(ecodes.EV_ABS, {}).get(code))
+            self.report.left_trigger = self._normalize_trigger(value, self._get_absinfo(code))
         elif code == ABS_RZ:
-            # Right trigger
-            self.report.right_trigger = self._normalize_trigger(value, self.device.capabilities(verbose=False).get(ecodes.EV_ABS, {}).get(code))
+            self.report.right_trigger = self._normalize_trigger(value, self._get_absinfo(code))
         elif code == ABS_HAT0X:
             # D-pad X
             if value < 0:
-                self.report.buttons |= SC2_BUTTON_DPAD_LEFT
-                self.report.buttons &= ~SC2_BUTTON_DPAD_RIGHT
+                self.report.buttons |= DPAD_LEFT
+                self.report.buttons &= ~DPAD_RIGHT
             elif value > 0:
-                self.report.buttons |= SC2_BUTTON_DPAD_RIGHT
-                self.report.buttons &= ~SC2_BUTTON_DPAD_LEFT
+                self.report.buttons |= DPAD_RIGHT
+                self.report.buttons &= ~DPAD_LEFT
             else:
-                self.report.buttons &= ~(SC2_BUTTON_DPAD_LEFT | SC2_BUTTON_DPAD_RIGHT)
+                self.report.buttons &= ~(DPAD_LEFT | DPAD_RIGHT)
         elif code == ABS_HAT0Y:
             # D-pad Y
             if value < 0:
-                self.report.buttons |= SC2_BUTTON_DPAD_UP
-                self.report.buttons &= ~SC2_BUTTON_DPAD_DOWN
+                self.report.buttons |= DPAD_UP
+                self.report.buttons &= ~DPAD_DOWN
             elif value > 0:
-                self.report.buttons |= SC2_BUTTON_DPAD_DOWN
-                self.report.buttons &= ~SC2_BUTTON_DPAD_UP
+                self.report.buttons |= DPAD_DOWN
+                self.report.buttons &= ~DPAD_UP
             else:
-                self.report.buttons &= ~(SC2_BUTTON_DPAD_UP | SC2_BUTTON_DPAD_DOWN)
+                self.report.buttons &= ~(DPAD_UP | DPAD_DOWN)
 
         self._dirty = True
         self._send_if_needed()
@@ -293,8 +273,14 @@ class InputHandler:
     def _send_if_needed(self):
         """Send report if dirty and callback is set."""
         if self._dirty and self.on_report:
-            self.on_report(self.report.to_bytes())
+            report = self.report.to_bytes()
+            self.on_report(report)
             self._dirty = False
+            print(f"[input] Report sent: {report.hex()}")
+
+    def _get_absinfo(self, code):
+        """Get absinfo for an axis code from cached capabilities."""
+        return self._absinfo.get(code)
 
     def _normalize_stick(self, value, absinfo):
         """Normalize stick value from device range to -32768..32767."""
