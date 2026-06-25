@@ -256,6 +256,9 @@ class InputHandler:
         gyro_x = struct.unpack_from('<h', raw, 30)[0]
         gyro_y = struct.unpack_from('<h', raw, 32)[0]
         gyro_z = struct.unpack_from('<h', raw, 34)[0]
+        # Trackpad pressure/force sensors (Neptune bytes 56-59)
+        lpad_force = struct.unpack_from('<H', raw, 56)[0]
+        rpad_force = struct.unpack_from('<H', raw, 58)[0]
 
         # SC2 45-byte report layout from SDL3 TritonMTUNoQuat_t struct:
         # [0]      seq_num (1 byte)
@@ -290,10 +293,10 @@ class InputHandler:
         struct.pack_into("<h", report45, 15, ry)
         struct.pack_into("<h", report45, 17, lpad_x)
         struct.pack_into("<h", report45, 19, lpad_y)
-        struct.pack_into("<H", report45, 21, 0)  # unPressureLeft (no force sensor on Neptune)
+        struct.pack_into("<H", report45, 21, lpad_force)  # unPressureLeft
         struct.pack_into("<h", report45, 23, rpad_x)
         struct.pack_into("<h", report45, 25, rpad_y)
-        struct.pack_into("<H", report45, 27, 0)  # unPressureRight (no force sensor on Neptune)
+        struct.pack_into("<H", report45, 27, rpad_force)  # unPressureRight
         struct.pack_into("<I", report45, 29, timestamp_us)
         struct.pack_into("<h", report45, 33, accel_x)
         struct.pack_into("<h", report45, 35, accel_y)
