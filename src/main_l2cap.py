@@ -93,6 +93,11 @@ class HoGPeripheral:
         print(f"[+] SC2 Custom Report characteristic handle: 0x{self._sc2_report_handle:04x}" if self._sc2_report_handle
               else "[-] WARNING: SC2 Custom Report characteristic not found")
 
+        # Find the Valve Custom Service CH1 handle (for Steam's direct reading)
+        self._valve_ch1_handle = self._find_valve_ch1_handle()
+        print(f"[+] Valve Custom CH1 handle: 0x{self._valve_ch1_handle:04x}" if self._valve_ch1_handle
+              else "[-] WARNING: Valve Custom CH1 not found")
+
         # Create advertisement object
         adv_path = "/com/steamdeck/sc2/adv0"
         from gatt_db import SC2_HID_SERVICE_UUID
@@ -140,6 +145,15 @@ class HoGPeripheral:
         we find them by Report ID 0x45 instead of the old Valve Custom UUID.
         """
         self._sc2_report_handle = self._find_report_char_handle(0x45, 0x01)
+
+    def _find_valve_ch1_handle(self):
+        """Find the Valve Custom Service CH1 handle by its UUID."""
+        from gatt_db import SC2_INPUT_CH1_UUID, uuid_to_bytes
+        valve_uuid = uuid_to_bytes(SC2_INPUT_CH1_UUID)
+        for handle, attr in self.gatt_db.attributes.items():
+            if attr.uuid == valve_uuid and (attr.properties & 0x10):  # NOTIFY property
+                return handle
+        return None
 
     def _find_report_char_handle(self, report_id, report_type):
         """Find the value handle of a CHR_REPORT with specific Report ID and Report Type."""
@@ -509,8 +523,11 @@ class HoGPeripheral:
             gamepad_45b = report_dict.get('gamepad_45b')
             if gamepad_12b and self._report_handle:
                 self.att_server.send_notification(self._report_handle, gamepad_12b)
-            if gamepad_45b and self._sc2_report_handle:
-                self.att_server.send_notification(self._sc2_report_handle, gamepad_45b)
+            if gamepad_45b:
+                if self._sc2_report_handle:
+                    self.att_server.send_notification(self._sc2_report_handle, gamepad_45b)
+                if self._valve_ch1_handle:
+                    self.att_server.send_notification(self._valve_ch1_handle, gamepad_45b)
         else:
             # Lizard mode: send mouse and keyboard reports when they change
             mouse_4b = report_dict.get('mouse_4b')
