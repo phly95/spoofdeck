@@ -15,7 +15,9 @@ The ATT server handles:
 """
 
 import argparse
+import os
 import signal
+import struct
 import sys
 import threading
 
@@ -110,6 +112,7 @@ class HoGPeripheral:
         # Set up Feature Report callbacks
         self._neptune_feature_fd = None
         self._setup_feature_report_callbacks()
+        self._setup_haptic_callback()
         print(f"[+] Advertisement object created at {adv_path}")
 
         # Create raw ATT server
@@ -195,6 +198,72 @@ class HoGPeripheral:
                 print(f"[+] Registering Feature Report ID 0x{report_id:02x} callback on handle 0x{handle:04x}")
                 self.gatt_db.read_callbacks[handle] = lambda r_id=report_id: self._on_feature_report_read(r_id)
                 self.gatt_db.write_callbacks[handle] = lambda value, r_id=report_id: self._on_feature_report_write(r_id, value)
+
+    def _setup_haptic_callback(self):
+        """Register write callbacks on SC2 output report handles for haptic forwarding.
+
+        When the host writes a haptic rumble command (report ID 0x80) to the
+        SC2 report characteristic or CHR_REPORT, forward it to the Neptune
+        controller via os.write() on the hidraw device.
+        """
+        # Register on both the Valve Custom Service report char and the HID Service CHR_REPORT
+        for label, handle in [("Valve Custom", self._sc2_report_handle), ("HID Service", self._sc2_hid_handle)]:
+            if handle:
+                print(f"[+] Registering haptic callback on {label} handle 0x{handle:04x}")
+                self.gatt_db.write_callbacks[handle] = lambda value, h=handle: self._on_haptic_write(h, value)
+
+    def _on_haptic_write(self, handle, value):
+        """Handle writes to the SC2 output report characteristic.
+
+        Parses the report ID and forwards haptic commands to Neptune.
+        """
+        if len(value) < 1:
+            return
+        report_id = value[0]
+        # Haptic rumble: report ID 0x80, payload 9 bytes (type, intensity, left.speed, left.gain, right.speed, right.gain)
+        if report_id == 0x80 and len(value) >= 10:
+            # Parse haptic rumble from SDL3 MsgHapticRumble format
+            # value[0] = report_id (0x80)
+            # value[1] = type (uint8)
+            # value[2-3] = intensity (uint16 LE)
+            # value[4-5] = left.speed (uint16 LE)
+            # value[6] = left.gain (int8)
+            # value[7-8] = right.speed (uint16 LE)
+            # value[9] = right.gain (int8)
+            left_speed = struct.unpack_from('<H', value, 4)[0]
+            right_speed = struct.unpack_from('<H', value, 7)[0]
+            print(f"[haptic] Rumble: left={left_speed} right={right_speed}")
+            self._forward_haptic_to_neptune(left_speed, right_speed)
+        else:
+            # Unknown output report — forward raw to Neptune
+            print(f"[haptic] Unknown output report ID=0x{report_id:02x} len={len(value)}, forwarding raw")
+            self._forward_raw_to_neptune(value)
+
+    def _forward_haptic_to_neptune(self, left_speed, right_speed):
+        """Forward haptic rumble to the Neptune controller via hidraw output report."""
+        try:
+            # Neptune rumble format: report ID 0x80 + 8 bytes payload
+            # Based on hid-steam.c steam_play_effect()
+            # Report: [0x80, left_intensity(2 LE), left_period(2 LE), right_intensity(2 LE), right_period(2 LE)]
+            left_i = min(0xFFFF, left_speed)
+            right_i = min(0xFFFF, right_speed)
+            report = struct.pack('<BHHH', 0x80, left_i, 0, right_i, 0)
+            self._write_neptune_output(report)
+        except Exception as e:
+            print(f"[-] Haptic forward error: {e}")
+
+    def _forward_raw_to_neptune(self, data):
+        """Forward raw output report to Neptune controller."""
+        self._write_neptune_output(data)
+
+    def _write_neptune_output(self, data):
+        """Write an output report to the Neptune hidraw device."""
+        self._ensure_neptune_feature_fd()
+        if self._neptune_feature_fd:
+            try:
+                os.write(self._neptune_feature_fd, data)
+            except Exception as e:
+                print(f"[-] Neptune output write error: {e}")
 
     def _on_feature_report_read(self, report_id):
         """Called when the host reads a Feature Report from the GATT database.
@@ -332,9 +401,18 @@ class HoGPeripheral:
             print(f"[DIAG] 🎮 → Acknowledging CLEAR_MAPPINGS")
 
         elif cmd == self.SC2_CMD_SET_ATTRIBUTES:
-            # SET_ATTRIBUTES (0x87) — Write-only command, no GET_REPORT response needed.
-            # Just acknowledge the write is sufficient. Do NOT store a pending response.
-            print(f"[DIAG] 🎮 → SET_SETTINGS write received (register=0x{value[3]:02x}, value=0x{value[4]:02x}{value[5]:02x})" if len(value) > 5 else f"[DIAG] 🎮 → SET_SETTINGS write received (len={len(value)})")
+            # SET_ATTRIBUTES (0x87) — Write-only command, but Steam may read FR 0x00
+            # to verify the write succeeded. Store a success response.
+            register = value[3] if len(value) > 3 else 0
+            data_val = value[4:6] if len(value) >= 6 else b'\x00\x00'
+            print(f"[DIAG] 🎮 → SET_SETTINGS register=0x{register:02x} value=0x{data_val.hex()}")
+            # Respond with command echo + success
+            response = bytearray([
+                0x87,       # echo command ID
+                0x00,       # status: success
+                register,   # echo register
+            ] + list(data_val))
+            response += bytearray(64 - len(response))
             return  # Don't store a response — this is write-only
 
         elif cmd == self.SC2_CMD_SET_MODE:

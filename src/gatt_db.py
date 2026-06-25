@@ -407,6 +407,16 @@ class GattDatabase:
             0x81, 0x02,        #   Input (Data,Var,Abs)
             0xC0,              # End Collection
 
+            # --- SC2 Haptic Rumble Output (Report ID 0x80, 9 bytes) ---
+            0x06, 0x00, 0xFF,  # Usage Page (Vendor Defined 0xFF00)
+            0x09, 0x80,        # Usage (0x80)
+            0xA1, 0x01,        # Collection (Application)
+            0x85, 0x80,        #   Report ID (0x80)
+            0x75, 0x08,        #   Report Size (8)
+            0x95, 0x09,        #   Report Count (9)
+            0x91, 0x02,        #   Output (Data,Var,Abs)
+            0xC0,              # End Collection
+
         ])
 
 
@@ -446,6 +456,10 @@ def build_sc2_database(device_name="Steam Controller 2026"):
         ]),
         (CHR_REPORT, ATT_PROP_READ | ATT_PROP_WRITE_NO_RSP, b'\x00', [
             (DESC_REPORT_REF, bytes([0x02, 0x02])),  # Report ID 2, Output
+        ]),
+        # SC2 Haptic Rumble Output (Report ID 0x80)
+        (CHR_REPORT, ATT_PROP_READ | ATT_PROP_WRITE_NO_RSP, b'\x00' * 10, [
+            (DESC_REPORT_REF, bytes([0x80, 0x02])),  # Report ID 0x80, Output
         ]),
         (CHR_REPORT, ATT_PROP_READ | ATT_PROP_NOTIFY, b'\x00' * 4, [
             (DESC_REPORT_REF, bytes([0x03, 0x01])),  # Report ID 3, Input (Mouse)
