@@ -419,84 +419,9 @@ class HoGPeripheral:
         print(f"[+] ATT connection established from {addr}")
 
     def _on_cccd_enabled(self, handle):
-        """Start periodic test notifications when CCCD is enabled for input reports."""
-        if handle == self._report_handle and self.att_server:
-            import threading, time, struct
-            def _send_periodic():
-                time.sleep(1)
-                for i in range(10):
-                    if not self.att_server.connected:
-                        break
-                    # Alternate between button press and stick move
-                    if i % 2 == 0:
-                        report = bytearray(12)
-                        report[0] = 0x01  # BTN_SOUTH
-                        self.att_server.send_notification(self._report_handle, bytes(report))
-                        print(f"[+] Test {i}: BTN_SOUTH press")
-                    else:
-                        report = bytearray(12)
-                        struct.pack_into('<h', report, 2, 10000)  # LX
-                        self.att_server.send_notification(self._report_handle, bytes(report))
-                        print(f"[+] Test {i}: LX=10000")
-                    time.sleep(0.5)
-                print(f"[+] Test notifications complete")
-            threading.Thread(target=_send_periodic, daemon=True).start()
-
-        elif handle == self._sc2_report_handle and self.att_server:
-            import threading, time
-            def _send_periodic():
-                time.sleep(1)
-                for i in range(10):
-                    if not self.att_server.connected:
-                        break
-                    # Send custom 45-byte test report
-                    report = bytearray(45)
-                    report[0] = 0x45
-                    report[1] = i & 0xFF
-                    if i % 2 == 0:
-                        report[2] = 0x01  # Button A
-                    self.att_server.send_notification(self._sc2_report_handle, bytes(report))
-                    print(f"[+] Test {i}: SC2 custom CH1 notification sent")
-                    time.sleep(0.5)
-                print(f"[+] SC2 Custom test notifications complete")
-            threading.Thread(target=_send_periodic, daemon=True).start()
-
-        elif handle == self._mouse_report_handle and self.att_server:
-            import threading, time, struct
-            def _send_periodic_mouse():
-                time.sleep(1)
-                print(f"[+] Starting periodic test mouse notifications")
-                for i in range(10):
-                    if not self.att_server.connected:
-                        break
-                    # Move mouse right by 10 units (dx=10, dy=0)
-                    report = struct.pack('<Bbbb', 0, 10, 0, 0)
-                    self.att_server.send_notification(self._mouse_report_handle, report)
-                    print(f"[+] Test Mouse {i}: dx=10")
-                    time.sleep(0.5)
-                print(f"[+] Test mouse notifications complete")
-            threading.Thread(target=_send_periodic_mouse, daemon=True).start()
-
-        elif handle == self._keyboard_report_handle and self.att_server:
-            import threading, time, struct
-            def _send_periodic_kbd():
-                time.sleep(1)
-                print(f"[+] Starting periodic test keyboard notifications")
-                for i in range(5):
-                    if not self.att_server.connected:
-                        break
-                    # Key down: A key (0x04)
-                    report_down = struct.pack('<BB6B', 0, 0, 0x04, 0, 0, 0, 0, 0)
-                    self.att_server.send_notification(self._keyboard_report_handle, report_down)
-                    print(f"[+] Test Kbd {i}: A down")
-                    time.sleep(0.1)
-                    # Key up
-                    report_up = struct.pack('<BB6B', 0, 0, 0, 0, 0, 0, 0, 0)
-                    self.att_server.send_notification(self._keyboard_report_handle, report_up)
-                    print(f"[+] Test Kbd {i}: A up")
-                    time.sleep(1.0)
-                print(f"[+] Test keyboard notifications complete")
-            threading.Thread(target=_send_periodic_kbd, daemon=True).start()
+        """Called when a CCCD is enabled for an input report."""
+        # Test notifications removed — use real Neptune input instead
+        pass
 
     def _on_att_disconnection(self, addr):
         print(f"[+] ATT connection lost from {addr}")
