@@ -74,6 +74,7 @@ class HoGPeripheral:
         self._keyboard_report_handle = None
         self._sc2_report_handle = None
         self.steam_input_mode = False
+        self._settings_store = {}  # register_index -> value (for GET_SETTINGS_VALUES)
 
     def setup(self, local_name="Steam Controller 2026"):
         """Set up GATT database and advertisement."""
@@ -182,11 +183,14 @@ class HoGPeripheral:
         return None
 
     # SC2 command IDs (sent via Feature Report 0x00)
-    SC2_CMD_CLEAR_MAPPINGS     = 0x81
-    SC2_CMD_GET_ATTRIBUTES     = 0x83
-    SC2_CMD_SET_MODE           = 0x85
-    SC2_CMD_SET_ATTRIBUTES     = 0x87
-    SC2_CMD_GET_SERIAL         = 0xAE
+    SC2_CMD_CLEAR_MAPPINGS         = 0x81
+    SC2_CMD_GET_ATTRIBUTES         = 0x83
+    SC2_CMD_SET_DEFAULT_MAPPINGS   = 0x85
+    SC2_CMD_SET_ATTRIBUTES         = 0x87
+    SC2_CMD_GET_SETTINGS_VALUES    = 0x89
+    SC2_CMD_GET_SETTINGS_DEFAULTS  = 0x8C
+    SC2_CMD_SET_CONTROLLER_MODE    = 0x8D
+    SC2_CMD_GET_SERIAL             = 0xAE
 
     def _setup_feature_report_callbacks(self):
         """Register callbacks for Feature Reports (Report IDs 0x00, 0x01, 0x85, 0x86, 0x87)."""
@@ -406,14 +410,29 @@ class HoGPeripheral:
             register = value[3] if len(value) > 3 else 0
             data_val = value[4:6] if len(value) >= 6 else b'\x00\x00'
             print(f"[DIAG] 🎮 → SET_SETTINGS register=0x{register:02x} value=0x{data_val.hex()}")
+            # Store the setting so GET_SETTINGS_VALUES can return it
+            self._settings_store[register] = struct.unpack_from('<H', data_val)[0] if len(data_val) >= 2 else 0
             # Respond with command echo + success
             response = bytearray([
-                0x87,       # echo command ID
-                0x00,       # status: success
-                register,   # echo register
-            ] + list(data_val))
+                0x87,       # header.type = ID_SET_SETTINGS_VALUES
+                0x00,       # header.length = 0 (ack)
+            ])
             response += bytearray(64 - len(response))
-            return  # Don't store a response — this is write-only
+            return
+
+        elif cmd == self.SC2_CMD_GET_SETTINGS_VALUES:
+            # GET_SETTINGS_VALUES (0x89) — Return current settings for requested registers.
+            # Format: [cmd, num_registers, reg1, reg2, ...]
+            # Response: [cmd, num_registers, reg1, val1_lo, val1_hi, reg2, val2_lo, val2_hi, ...]
+            num_regs = value[2] if len(value) > 2 else 0
+            response = bytearray([0x89, num_regs])
+            for i in range(num_regs):
+                reg_idx = 3 + i if len(value) > 3 + i else 0
+                reg = value[reg_idx] if reg_idx < len(value) else 0
+                val = self._settings_store.get(reg, 0)
+                response += bytes([reg, val & 0xFF, (val >> 8) & 0xFF])
+            response += bytearray(64 - len(response))
+            print(f"[DIAG] 🎮 → GET_SETTINGS_VALUES: returning {num_regs} registers")
 
         elif cmd == self.SC2_CMD_SET_MODE:
             # SET_MODE (0x85) — Handle mode switch, echo back with proper header
