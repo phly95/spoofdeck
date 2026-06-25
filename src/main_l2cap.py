@@ -95,10 +95,9 @@ class HoGPeripheral:
 
         # Create advertisement object
         adv_path = "/com/steamdeck/sc2/adv0"
-        from gatt_db import SC2_HID_SERVICE_UUID
         self.adv = LEAdvertisement(
             self.bus, adv_path, local_name,
-            service_uuids=["1812", SC2_HID_SERVICE_UUID],
+            service_uuids=["1812"],  # HID Service only — SC2 Custom reports are now inside it
             appearance=0x03C4,
         )
 
@@ -134,24 +133,12 @@ class HoGPeripheral:
                         return
 
     def _find_sc2_report_handle(self):
-        """Find the handle of the SC2 custom characteristic for input notifications."""
-        from gatt_db import SC2_INPUT_CH1_UUID, uuid_to_bytes
-        sc2_uuid_bytes = uuid_to_bytes(SC2_INPUT_CH1_UUID)
-        for handle, attr in self.gatt_db.attributes.items():
-            if attr.uuid == sc2_uuid_bytes:
-                if attr.properties & 0x10:
-                    self._sc2_report_handle = handle
-                    return
-        # Fallback: look for the characteristic declaration
-        for handle, attr in self.gatt_db.attributes.items():
-            if attr.uuid == b'\x03\x28':  # Characteristic declaration UUID
-                if len(attr.value) >= 19:
-                    char_uuid = attr.value[3:]
-                    props = attr.value[0]
-                    if char_uuid == sc2_uuid_bytes and props & 0x10:
-                        val_handle = attr.value[1] | (attr.value[2] << 8)
-                        self._sc2_report_handle = val_handle
-                        return
+        """Find the handle of the SC2 custom characteristic for input notifications.
+        
+        Now that SC2 Custom reports are in the HID Service (CHR_REPORT 0x2A4D),
+        we find them by Report ID 0x45 instead of the old Valve Custom UUID.
+        """
+        self._sc2_report_handle = self._find_report_char_handle(0x45, 0x01)
 
     def _find_report_char_handle(self, report_id, report_type):
         """Find the value handle of a CHR_REPORT with specific Report ID and Report Type."""
@@ -420,11 +407,31 @@ class HoGPeripheral:
 
     def _on_cccd_enabled(self, handle):
         """Called when a CCCD is enabled for an input report."""
+        # Build a map of known handles for diagnostic output
+        handle_names = {}
+        if self._report_handle:
+            handle_names[self._report_handle] = "Gamepad (0x0012)"
+        if self._mouse_report_handle:
+            handle_names[self._mouse_report_handle] = "Mouse (0x0019)"
+        if self._keyboard_report_handle:
+            handle_names[self._keyboard_report_handle] = "Keyboard (0x001d)"
+        if self._sc2_report_handle:
+            handle_names[self._sc2_report_handle] = f"SC2 Custom (0x{self._sc2_report_handle:04x})"
+
+        name = handle_names.get(handle, f"Unknown (0x{handle:04x})")
+        print(f"[DIAG] 📡 CCCD ENABLED: {name}")
+
+        # Print all active subscriptions
+        if self.att_server:
+            active = sorted(self.att_server._notification_handles)
+            names = [handle_names.get(h, f"0x{h:04x}") for h in active]
+            print(f"[DIAG] 📡 Active subscriptions: {names}")
+
         # Auto-switch to gamepad mode when host subscribes to gamepad or SC2 custom CCCDs
         if handle in (self._report_handle, self._sc2_report_handle):
             if not self.steam_input_mode:
                 self.steam_input_mode = True
-                print(f"[DIAG] ⭐ AUTO MODE SWITCH: Host subscribed to handle 0x{handle:04x} → Steam Input Mode")
+                print(f"[DIAG] ⭐ AUTO MODE SWITCH: Host subscribed to {name} → Steam Input Mode")
 
     def _on_att_disconnection(self, addr):
         print(f"[+] ATT connection lost from {addr}")
