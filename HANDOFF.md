@@ -19,7 +19,7 @@ We present the **Steam Deck** as a **Steam Controller 2026 (SC2 / Triton)** over
 │  │  └─ Raw L2CAP ATT server thread                     │ │
 │  │     └─ Binds to C2:12:34:56:78:9A CID 4             │ │
 │  │     └─ Handles ATT PDU exchange (MTU, discovery)    │ │
-│  │     └─ Serves GATT database (74 attributes)         │ │
+│  │     └─ Serves GATT database (82 attributes, 6 services)│ │
 │  └─────────────────────────────────────────────────────┘ │
 │                                                          │
 │  BlueZ handles:                                          │
@@ -54,36 +54,56 @@ We present the **Steam Deck** as a **Steam Controller 2026 (SC2 / Triton)** over
 - **Neptune Auto-Recovery**: Reopens hidraw on crash (2s delay, 10 retries).
 - **Standard HID Gamepad Reports**: 12-byte reports on handle `0x0012` with buttons, analog sticks (Y axis corrected), triggers. Host creates `/dev/input/eventN` — **KDE Game Controller and Steam detect this as a generic controller**.
 - **Lizard Mode Mouse/Keyboard**: Relative mouse (right trackpad) and keyboard reports on handles `0x0019`/`0x001d`.
-- **Synthetic SC2 Command Handler**: Feature Report 0x00 intercepts SC2 commands (0x83 GET_ATTRIBUTES, 0xAE GET_SERIAL, 0x87 SET_SETTINGS, etc.) with correct byte-level response format matching real device captures from InputPlumber.
-- **CHR_REPORT SC2 Custom in HID Service**: Report IDs 0x45 (45-byte) and 0x47 (47-byte) in HID Service for hog-ll subscription, PLUS Valve Custom Service for Steam identification. Dual notification targets.
+- **Synthetic SC2 Command Handler**: Feature Report 0x00 intercepts SC2 commands (0x83 GET_ATTRIBUTES, 0xAE GET_SERIAL, 0x87 SET_SETTINGS, 0x81 CLEAR_MAPPINGS) with correct byte-level response format matching real device captures from InputPlumber.
+- **Steam Client SC2 Recognition**: Steam detects Type 10 (Neptune/SC2), ProductID 4867 (0x1303), loads `controller_neptune.vdf`, auto-registers controller. Vendor-defined HID Report Map entries removed (Usage Page 0xFF00/0xFF01) to avoid generic device detection.
 - **Comprehensive Diagnostic Logging** (`[DIAG]` tagged).
 
 ---
 
 ## 3. What Needs to be Done
 
-### 1. Steam Controller 2026 Recognition (Proprietary Input Format)
-- **Status**: Adding CHR_REPORT for SC2 Custom to the HID Service causes Steam to detect the device as a **generic controller** instead of a **Steam Controller 2026**. The vendor-defined HID Report Map entries change the kernel's uhid device type.
-- **Root cause**: The HID Report Map defines the device type. Vendor-defined collections (Usage Page 0xFF01) create generic HID devices. The Valve Custom HID Service alone is not enough for Steam to use SC2-specific input handling.
+### 1. Steam Client Input Delivery (No Input Despite SC2 Recognition)
+- **Status**: Steam now recognizes the device as **Type 10 (Neptune/SC2)** with ProductID 4867 (0x1303), loads `controller_neptune.vdf` configs, and auto-registers the controller. However, **no input events reach Steam** — the controller shows in Steam Settings but buttons/sticks do nothing.
+- **Root cause**: Steam reads input via `SDL_hid_read()` on the hidraw device (standard HID reports on handle 0x0012). The 12-byte gamepad reports we send are standard HID gamepad format, but Steam's SC2 driver expects the reports to match what a real SC2 sends — which is a different format (45-byte/47-byte SC2 Custom reports, NOT standard HID gamepad reports).
 
-**Critical finding — two configurations tested:**
+**Critical finding — Steam's actual communication path (from ATT logs):**
 
-| | Config A: SC2 Recognized, No Input | Config B: Generic Controller, Input Works |
-|---|---|---|
-| **Valve Custom HID Service** | ✅ With CCCDs + NOTIFY | ✅ With CCCDs + NOTIFY |
-| **CHR_REPORT in HID Service** | ❌ Not present | ✅ Report IDs 0x45, 0x47 |
-| **HID Report Map** | Standard only (Gamepad, Mouse, Keyboard) | Standard + Vendor-defined (0xFF01) for 0x45, 0x47 |
-| **hog-ll subscribes to SC2 Custom** | ❌ No (Valve Service not in HID) | ✅ Yes (CHR_REPORT in HID) |
-| **Kernel uhid device type** | SC2-specific (via PnP ID + standard HID only) | Generic HID (vendor collections confuse parser) |
-| **Steam sees** | Steam Controller 2026 | Generic gamepad |
-| **Input delivery** | ❌ Notifications dropped (no CCCD on Valve handles) | ✅ Notifications reach host via CHR_REPORT |
+```
+Phase 1: Service Discovery
+  Read PnP ID (VID=0x28DE, PID=0x1303) → identifies as SC2
+  Read HID Report Map, descriptors, Device Name
 
-The vendor-defined HID Report Map entries (Usage Page 0xFF01) are what break SC2 identification. The kernel's HID parser uses the Report Map to determine device type, and vendor-defined collections result in a generic HID device.
+Phase 2: CCCD Subscriptions (ALL by hog-ll, NOT Steam)
+  0x0012 (Gamepad)      ✅
+  0x0019 (Mouse)        ✅
+  0x001d (Keyboard)     ✅
+  0x0030 (CHR_REPORT)   ✅
+  0x0034 (CHR_REPORT 2) ✅
+  0x0042 (Battery)      ✅
+  0x0039 (Valve Custom) ❌ NEVER subscribed by anyone
+
+Phase 3: Feature Report Handshake (all on FR 0x00, handle 0x0021)
+  1. GET_ATTRIBUTES (0x83) → responded ✅
+  2. Unknown (0xf2)        → responded ✅
+  3. GET_SERIAL (0xae)     → responded ✅
+  4. SET_SETTINGS (0x87) flurry: registers 0x32, 0x09, 0x2d, 0x22, 0x23...
+  5. Unknown cmds: 0xc1, 0xdc, 0xe2
+  6. CLEAR_MAPPINGS (0x81)
+  7. More SET_SETTINGS with complex payloads
+
+Phase 4: Stuck in SET_SETTINGS loop (0x87 register 0x09 and 0x2d repeating)
+  Never reaches SET_MODE (0x85) → "Warning, couldn't get controller details"
+  Falls back to Type 30 (generic gamepad)
+```
+
+**Key insight**: Steam does NOT use GATT notifications. All control goes through Feature Reports (ATT Write/Read on handle 0x0021). Steam opens `/dev/hidrawN` via SDL3's hidraw backend and reads input via `SDL_hid_read()`.
 
 - **What to try next**:
-  1. Investigate how InputPlumber's host-side driver discovers and reads from the Valve Custom HID Service — it may bypass hog-ll entirely and use raw GATT characteristics.
-  2. Consider running InputPlumber on the host instead of relying on hog-ll.
-  3. Research whether there's a way to tell hog-ll to forward Valve Custom Service data to Steam.
+  1. **Fix the input report format**: Steam's SC2 driver expects 45-byte SC2 Custom reports (Report ID 0x45), NOT 12-byte standard gamepad reports. The HID Report Map must NOT have vendor-defined entries (those break SC2 detection), but Steam still reads the 12-byte gamepad reports and ignores them because they're not SC2 format.
+  2. **Possible approach**: Remove the standard HID gamepad/mouse/keyboard from the Report Map entirely (making it purely vendor-defined like the real SC2026), and send SC2-format input via Feature Reports or a different mechanism.
+  3. **Investigate `device_start_input_reports`**: This is the command that tells the real SC2 to start sending input. Steam sends this during the handshake — we may need to respond to it correctly.
+  4. **Unknown commands 0xf2, 0xc1, 0xdc, 0xe2**: Our responses may be wrong, causing Steam to get stuck in the SET_SETTINGS loop.
+  5. **Add GetChipId (0xBA) support**: May be needed for Steam to proceed past the handshake.
 
 ### 2. Dual Trackpads & IMU (Gyro/Accel) Forwarding
 - Update the SC2 custom 45-byte report generation in `src/input_handler.py` to correctly extract trackpad X/Y and IMU values from Neptune's 64-byte reports.
