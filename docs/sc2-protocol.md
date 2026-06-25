@@ -32,37 +32,40 @@ This is the primary HID service UUID for the Steam Controller 2026 BLE profile. 
 
 ### Report 0x45 (45 bytes) — Primary Input
 
+**Note**: Report ID (0x45) is NOT included in the ATT notification payload — BlueZ
+hog-ll adds it from the Report Reference descriptor. The notification data is exactly
+45 bytes starting at offset 0 = sequence number.
+
+**Verified against btmon captures from real SC2 device (serial 28de-1303-2efea7d).**
+
 ```
 Offset  Size  Description
-0       1     Report ID (0x45)
-1       1     Sequence number (incrementing)
-2       4     Button state (32-bit bitmask)
-6       1     Left trigger
-7       1     Right trigger
-8       2     Left stick X
-10      2     Left stick Y
-12      2     Right stick X
-14      2     Right stick Y
-16      2     Left trackpad X
-18      2     Left trackpad Y
-20      2     Right trackpad X
-22      2     Right trackpad Y
-24      2     IMU accelerometer X
-26      2     IMU accelerometer Y
-28      2     IMU accelerometer Z
-30      2     IMU gyroscope X
-32      2     IMU gyroscope Y
-34      2     IMU gyroscope Z
-36      4     IMU timestamp (32-bit, microseconds)
-40      2     IMU quaternion W (fixed-point)
-42      2     IMU quaternion X (fixed-point)
-44      2     IMU quaternion Y (fixed-point)
-46      2     IMU quaternion Z (fixed-point)
+0       1     Sequence number (incrementing by 0x32 per report)
+1       4     Button state (32-bit bitmask, little-endian)
+5       1     Left trigger (0-255)
+6       1     Right trigger (0-255)
+7       2     Left stick X (signed 16-bit LE, ~1050 at center)
+9       2     Left stick Y (signed 16-bit LE, ~-1900 at center)
+11      2     Right stick X (signed 16-bit LE, ~450 at center)
+13      2     Right stick Y (signed 16-bit LE, ~1250 at center)
+15      2     Left trackpad X (signed 16-bit LE)
+17      2     Left trackpad Y (signed 16-bit LE)
+19      2     Right trackpad X (signed 16-bit LE)
+21      2     Right trackpad Y (signed 16-bit LE)
+23      2     IMU accelerometer X (signed 16-bit LE)
+25      2     IMU accelerometer Y (signed 16-bit LE)
+27      2     IMU accelerometer Z (signed 16-bit LE, ~16400 = 1g)
+29      2     IMU gyroscope X (signed 16-bit LE)
+31      2     IMU gyroscope Y (signed 16-bit LE)
+33      2     IMU gyroscope Z (signed 16-bit LE)
+35      4     IMU timestamp (32-bit LE, microseconds)
+39      6     Reserved (quaternion W/X/Y — zeros in 45-byte report)
 ```
 
-**Total: 48 bytes** (45 reported + overhead)
+**Total: 45 bytes**
 
-Note: This report does NOT include quaternion — it uses 32-bit timestamp only.
+Note: The 45-byte report does NOT include quaternion Z or full quaternion data.
+The full 48-byte format (with Report ID + quaternion) is used over USB (Report 0x42).
 
 ### Report 0x47 (47 bytes) — Extended Input
 

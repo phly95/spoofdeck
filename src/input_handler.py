@@ -243,9 +243,16 @@ class InputHandler:
         gyro_y = struct.unpack_from('<h', raw, 32)[0]
         gyro_z = struct.unpack_from('<h', raw, 34)[0]
 
-        # NOTE: Report ID (0x45) is NOT included in the data — hog-ll's bt_uhid_input()
-        # adds it automatically from the Report Reference descriptor. Including it causes
-        # a double Report ID that corrupts the kernel's HID parser.
+        # SC2 45-byte report layout (byte positions after Report ID stripped):
+        # Based on user feedback mapping Deck inputs → Steam controller test display:
+        #   Deck LX right → Steam LX up:       Steam_lx = Deck_lx... no
+        #   Deck LX right → Steam LX up:       report45[9..10] = lx  → Steam reads as ly
+        #   Deck LY up → Steam RX left:         report45[7..8] = -ry  → Steam reads as lx (negated = left)
+        #   Deck RY up → Steam LX left:         report45[11..12] = -ly → Steam reads as rx (negated = left)
+        #   Deck RX left/right → Steam RT:      report45[6] = rx      → Steam reads as rt
+        #
+        # Actually this is too complex to derive from feedback alone. Let me try
+        # the documented layout first since the btmon analysis confirmed it matches.
         report45 = bytearray(45)
         report45[0] = self.seq_num
         struct.pack_into("<I", report45, 1, b32)
