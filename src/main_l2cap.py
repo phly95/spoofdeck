@@ -420,8 +420,11 @@ class HoGPeripheral:
 
     def _on_cccd_enabled(self, handle):
         """Called when a CCCD is enabled for an input report."""
-        # Test notifications removed — use real Neptune input instead
-        pass
+        # Auto-switch to gamepad mode when host subscribes to gamepad or SC2 custom CCCDs
+        if handle in (self._report_handle, self._sc2_report_handle):
+            if not self.steam_input_mode:
+                self.steam_input_mode = True
+                print(f"[DIAG] ⭐ AUTO MODE SWITCH: Host subscribed to handle 0x{handle:04x} → Steam Input Mode")
 
     def _on_att_disconnection(self, addr):
         print(f"[+] ATT connection lost from {addr}")
