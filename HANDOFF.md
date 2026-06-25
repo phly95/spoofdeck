@@ -65,6 +65,21 @@ We present the **Steam Deck** as a **Steam Controller 2026 (SC2 / Triton)** over
 ### 1. Steam Controller 2026 Recognition (Proprietary Input Format)
 - **Status**: Adding CHR_REPORT for SC2 Custom to the HID Service causes Steam to detect the device as a **generic controller** instead of a **Steam Controller 2026**. The vendor-defined HID Report Map entries change the kernel's uhid device type.
 - **Root cause**: The HID Report Map defines the device type. Vendor-defined collections (Usage Page 0xFF01) create generic HID devices. The Valve Custom HID Service alone is not enough for Steam to use SC2-specific input handling.
+
+**Critical finding — two configurations tested:**
+
+| | Config A: SC2 Recognized, No Input | Config B: Generic Controller, Input Works |
+|---|---|---|
+| **Valve Custom HID Service** | ✅ With CCCDs + NOTIFY | ✅ With CCCDs + NOTIFY |
+| **CHR_REPORT in HID Service** | ❌ Not present | ✅ Report IDs 0x45, 0x47 |
+| **HID Report Map** | Standard only (Gamepad, Mouse, Keyboard) | Standard + Vendor-defined (0xFF01) for 0x45, 0x47 |
+| **hog-ll subscribes to SC2 Custom** | ❌ No (Valve Service not in HID) | ✅ Yes (CHR_REPORT in HID) |
+| **Kernel uhid device type** | SC2-specific (via PnP ID + standard HID only) | Generic HID (vendor collections confuse parser) |
+| **Steam sees** | Steam Controller 2026 | Generic gamepad |
+| **Input delivery** | ❌ Notifications dropped (no CCCD on Valve handles) | ✅ Notifications reach host via CHR_REPORT |
+
+The vendor-defined HID Report Map entries (Usage Page 0xFF01) are what break SC2 identification. The kernel's HID parser uses the Report Map to determine device type, and vendor-defined collections result in a generic HID device.
+
 - **What to try next**:
   1. Investigate how InputPlumber's host-side driver discovers and reads from the Valve Custom HID Service — it may bypass hog-ll entirely and use raw GATT characteristics.
   2. Consider running InputPlumber on the host instead of relying on hog-ll.
