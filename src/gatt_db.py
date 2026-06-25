@@ -386,7 +386,6 @@ class GattDatabase:
             0x95, 0x06,        #   Report Count (6)
             0x81, 0x00,        #   Input (Data,Ary,Abs)  ; Key array (6 bytes)
             0xC0,              # End Collection
-            0xC0,              # End Collection
         ])
 
 
