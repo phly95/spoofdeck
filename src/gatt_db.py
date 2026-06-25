@@ -386,26 +386,6 @@ class GattDatabase:
             0x95, 0x06,        #   Report Count (6)
             0x81, 0x00,        #   Input (Data,Ary,Abs)  ; Key array (6 bytes)
             0xC0,              # End Collection
-
-            # --- SC2 Custom Input Report (Report ID 0x45, 45 bytes) ---
-            0x06, 0x01, 0xFF,  # Usage Page (Vendor Defined 0xFF01)
-            0x09, 0x45,        # Usage (0x45)
-            0xA1, 0x01,        # Collection (Application)
-            0x85, 0x45,        #   Report ID (0x45)
-            0x75, 0x08,        #   Report Size (8)
-            0x95, 0x2D,        #   Report Count (45)
-            0x81, 0x02,        #   Input (Data,Var,Abs)
-            0xC0,              # End Collection
-
-            # --- SC2 Custom Input Report 2 (Report ID 0x47, 47 bytes) ---
-            0x06, 0x01, 0xFF,  # Usage Page (Vendor Defined 0xFF01)
-            0x09, 0x47,        # Usage (0x47)
-            0xA1, 0x01,        # Collection (Application)
-            0x85, 0x47,        #   Report ID (0x47)
-            0x75, 0x08,        #   Report Size (8)
-            0x95, 0x2F,        #   Report Count (47)
-            0x81, 0x02,        #   Input (Data,Var,Abs)
-            0xC0,              # End Collection
             0xC0,              # End Collection
         ])
 
@@ -470,16 +450,6 @@ def build_sc2_database(device_name="Steam Controller 2026"):
         ]),
         (CHR_REPORT, ATT_PROP_READ | ATT_PROP_WRITE, b'\x00' * 64, [
             (DESC_REPORT_REF, bytes([0x87, 0x03])),  # Report ID 0x87, Feature
-        ]),
-        # --- SC2 Custom Input Reports (moved from Valve Custom HID Service) ---
-        # These MUST be in the HID Service for hog-ll to subscribe to them.
-        (CHR_REPORT, ATT_PROP_READ | ATT_PROP_NOTIFY, b'\x00' * 45, [
-            (DESC_REPORT_REF, bytes([0x45, 0x01])),  # Report ID 0x45, Input
-            (DESC_CCCD, b'\x00\x00'),
-        ]),
-        (CHR_REPORT, ATT_PROP_READ | ATT_PROP_NOTIFY, b'\x00' * 47, [
-            (DESC_REPORT_REF, bytes([0x47, 0x01])),  # Report ID 0x47, Input
-            (DESC_CCCD, b'\x00\x00'),
         ]),
     ])
 

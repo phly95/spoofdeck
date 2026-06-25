@@ -88,15 +88,10 @@ class HoGPeripheral:
         print(f"[+] Mouse Report handle: 0x{self._mouse_report_handle:04x}" if self._mouse_report_handle else "[-] WARNING: Mouse Report characteristic not found")
         print(f"[+] Keyboard Report handle: 0x{self._keyboard_report_handle:04x}" if self._keyboard_report_handle else "[-] WARNING: Keyboard Report characteristic not found")
 
-        # Find the SC2 custom characteristic handle for input notifications
+        # Find the SC2 custom characteristic handle (Valve Custom Service)
         self._find_sc2_report_handle()
         print(f"[+] SC2 Custom Report characteristic handle: 0x{self._sc2_report_handle:04x}" if self._sc2_report_handle
               else "[-] WARNING: SC2 Custom Report characteristic not found")
-
-        # Find the Valve Custom Service CH1 handle (for Steam's direct reading)
-        self._valve_ch1_handle = self._find_valve_ch1_handle()
-        print(f"[+] Valve Custom CH1 handle: 0x{self._valve_ch1_handle:04x}" if self._valve_ch1_handle
-              else "[-] WARNING: Valve Custom CH1 not found")
 
         # Create advertisement object
         adv_path = "/com/steamdeck/sc2/adv0"
@@ -139,21 +134,24 @@ class HoGPeripheral:
                         return
 
     def _find_sc2_report_handle(self):
-        """Find the handle of the SC2 custom characteristic for input notifications.
-        
-        Now that SC2 Custom reports are in the HID Service (CHR_REPORT 0x2A4D),
-        we find them by Report ID 0x45 instead of the old Valve Custom UUID.
-        """
-        self._sc2_report_handle = self._find_report_char_handle(0x45, 0x01)
-
-    def _find_valve_ch1_handle(self):
-        """Find the Valve Custom Service CH1 handle by its UUID."""
+        """Find the handle of the SC2 custom characteristic for input notifications."""
         from gatt_db import SC2_INPUT_CH1_UUID, uuid_to_bytes
-        valve_uuid = uuid_to_bytes(SC2_INPUT_CH1_UUID)
+        sc2_uuid_bytes = uuid_to_bytes(SC2_INPUT_CH1_UUID)
         for handle, attr in self.gatt_db.attributes.items():
-            if attr.uuid == valve_uuid and (attr.properties & 0x10):  # NOTIFY property
-                return handle
-        return None
+            if attr.uuid == sc2_uuid_bytes:
+                if attr.properties & 0x10:
+                    self._sc2_report_handle = handle
+                    return
+        # Fallback: look for the characteristic declaration
+        for handle, attr in self.gatt_db.attributes.items():
+            if attr.uuid == b'\x03\x28':  # Characteristic declaration UUID
+                if len(attr.value) >= 19:
+                    char_uuid = attr.value[3:]
+                    props = attr.value[0]
+                    if char_uuid == sc2_uuid_bytes and props & 0x10:
+                        val_handle = attr.value[1] | (attr.value[2] << 8)
+                        self._sc2_report_handle = val_handle
+                        return
 
     def _find_report_char_handle(self, report_id, report_type):
         """Find the value handle of a CHR_REPORT with specific Report ID and Report Type."""
@@ -523,11 +521,8 @@ class HoGPeripheral:
             gamepad_45b = report_dict.get('gamepad_45b')
             if gamepad_12b and self._report_handle:
                 self.att_server.send_notification(self._report_handle, gamepad_12b)
-            if gamepad_45b:
-                if self._sc2_report_handle:
-                    self.att_server.send_notification(self._sc2_report_handle, gamepad_45b)
-                if self._valve_ch1_handle:
-                    self.att_server.send_notification(self._valve_ch1_handle, gamepad_45b)
+            if gamepad_45b and self._sc2_report_handle:
+                self.att_server.send_notification(self._sc2_report_handle, gamepad_45b)
         else:
             # Lizard mode: send mouse and keyboard reports when they change
             mouse_4b = report_dict.get('mouse_4b')
