@@ -481,9 +481,6 @@ def build_sc2_database(device_name="Steam Controller 2026"):
             (DESC_REPORT_REF, bytes([0x47, 0x01])),  # Report ID 0x47, Input
             (DESC_CCCD, b'\x00\x00'),
         ]),
-        (CHR_REPORT, ATT_PROP_READ | ATT_PROP_WRITE | ATT_PROP_WRITE_NO_RSP, b'\x00' * 64, [
-            (DESC_REPORT_REF, bytes([0x00, 0x03])),  # Report ID 0x00, Feature (SC2 command channel)
-        ]),
     ])
 
     # Valve Custom HID Service — REMOVED
