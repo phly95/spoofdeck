@@ -84,12 +84,13 @@ Make a **Steam Deck** present itself as a **Steam Controller 2026 (SC2)** over *
 - **Lizard Mode input events flow** — Relative mouse movements (right trackpad) and key taps successfully register on host `evdev` event nodes (`/dev/input/event256`/`257`).
 - Connection stable for 5+ minutes (use `connect` not `pair`).
 - **Synthetic SC2 Command Handler** — Feature Report 0x00 (SC2 command channel) intercepted locally instead of proxying to Neptune. Handles GET_ATTRIBUTES, GET_SERIAL, CLEAR_MAPPINGS, SET_ATTRIBUTES, SET_MODE with synthetic SC2 device info responses.
+- **Steam Controller Recognition** — Steam Client on host now recognizes the device as a Steam Controller 2026 in Controller Settings. GET_ATTRIBUTES (0x83) and GET_SERIAL (0xAE) responses use correct SC2 protocol format.
 - **Neptune Auto-Recovery** — Input handler retries opening hidraw device on crash (2s delay, 10 retries).
 - **Comprehensive Diagnostic Logging** — `[DIAG]` tagged logs for CCCD subscriptions, notification drops, Feature Report writes, and full disconnect summary.
 
 ### What Needs to Happen Next
 
-1. **Test Synthetic SC2 Responses with Steam** — Run Steam on the host PC and watch `[DIAG]` logs. If the GET_ATTRIBUTES response format is correct, Steam should proceed past the retry loop to Feature Report 0x85 (mode switch). If not, refine the synthetic response format based on InputPlumber/SC2 protocol research.
+1. **Complete Steam Controller Recognition** — Steam now recognizes the device as an SC2 in Controller Settings. Currently stuck on SET_SETTINGS (0x87) loop. Need to test if fix allows progression to mode switch (0x85). May need to add GetChipId (0xBA) support.
 2. **Trackpad/IMU Forwarding in Gamepad Mode** — Update `src/input_handler.py` to map Neptune's dual trackpad coordinates and IMU (gyro/accelerometer) data into the custom 45-byte/47-byte SC2 report format.
 3. **Daemon Auto-Reconnect** — Ensure the Deck automatically restarts advertising and accepts connections cleanly upon host reconnects.
 

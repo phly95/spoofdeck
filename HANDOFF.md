@@ -71,11 +71,19 @@ We present the **Steam Deck** as a **Steam Controller 2026 (SC2 / Triton)** over
 
 ## 3. What Needs to be Done
 
-### 1. Steam Mode Switch — Test Synthetic SC2 Responses
-- **Status**: Synthetic SC2 command handler is implemented and deployed. Need to test if it works.
-- **What was discovered**: Steam was stuck in an infinite retry loop on Feature Report 0x00 (GET_ATTRIBUTES command 0x83). The old code proxied this to Neptune, which crashed. Now we return synthetic SC2 device info locally.
-- **Test**: Run Steam on the host, watch logs for `[DIAG]` lines. If GET_ATTRIBUTES response format is correct, Steam should proceed past the retry loop to Feature Report 0x85 (mode switch).
-- **Verify**: Check if `steam_input_mode` becomes `True` and gamepad/SC2 reports start flowing.
+### 1. Steam Controller Recognition — Partially Working
+- **Status**: Steam now recognizes the device as a Steam Controller 2026 in Controller Settings.
+- **What works**: GET_ATTRIBUTES (0x83) and GET_SERIAL (0xAE) return correct synthetic responses. Steam proceeds past these commands.
+- **What's stuck**: After initial handshake, Steam sends SET_SETTINGS (0x87) in a 3-second loop. The response format was wrong (used old `[0x01, 0x87, 0x00]` format instead of proper `[cmd, length, ...]` header). Fixed to not store a GET_REPORT response for 0x87 (write-only command per InputPlumber).
+- **Next**: Test if the 0x87 fix allows Steam to proceed to 0x81 (ClearDigitalMappings) and 0x85 (mode switch). If not, may need to add GetChipId (0xBA) support or fix other response formats.
+- **Key commands in the SC2 protocol flow**:
+  1. `0x83` GET_ATTRIBUTES → response: `[0x83, 0x2D, 9 attributes x 5 bytes, padding]`
+  2. `0xAE` GET_SERIAL → response: `[0xAE, 0x14, 0x01, serial_ascii, padding]`
+  3. `0xBA` GET_CHIP_ID → response: `[0xBA, 0x11, 0x00, 15-byte chip_id, padding]` (NOT YET IMPLEMENTED)
+  4. `0x81` CLEAR_MAPPINGS → write-only (exits lizard mode)
+  5. `0x85` SET_DEFAULT_DIGITAL_MAPPINGS → write-only (enters gamepad mode)
+  6. `0x87` SET_SETTINGS → write-only (configures registers)
+  7. `0x85` via Feature Report 0x85 → mode switch (lizard ↔ Steam Input)
 
 ### 2. Dual Trackpads & IMU (Gyro/Accel) Forwarding
 - Update the SC2 custom 45-byte report generation (`gamepad_45b`) in `src/input_handler.py` to correctly extract the trackpad coordinates and the IMU values from the Neptune 64-byte reports and package them.

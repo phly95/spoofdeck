@@ -274,70 +274,82 @@ class HoGPeripheral:
         response = bytearray(64)
 
         if cmd == self.SC2_CMD_GET_ATTRIBUTES:
-            # GET_ATTRIBUTES (0x83) — Return device attributes
-            # Steam uses this to identify the controller and its capabilities
-            response[0] = 0x01       # Message type
-            response[1] = 0x83       # Echo command
-            response[2] = 0x00       # Status: success
-            # Board revision
-            response[3] = 0x02       # Board revision (SC2 = 2)
-            # Firmware build timestamp (fake but plausible: 2025-01-15)
-            response[4] = 0xE9       # Year low byte (2025 = 0x07E9)
-            response[5] = 0x07       # Year high byte
-            response[6] = 0x01       # Month (January)
-            response[7] = 0x0F       # Day (15)
-            # Hardware revision
-            response[8] = 0x01       # HW revision major
-            response[9] = 0x00       # HW revision minor
-            # Firmware build number
-            response[10] = 0x39      # Build number low (57)
-            response[11] = 0x00      # Build number high
-            # Bootloader build
-            response[12] = 0x00
-            response[13] = 0x00
-            # Radio firmware version
-            response[14] = 0x07
-            response[15] = 0x01
+            # GET_ATTRIBUTES (0x83) — Real device response from InputPlumber capture.
+            # Format: [cmd_echo, length, attributes[]]
+            # Each attribute: 1-byte tag + 4-byte LE uint32 value.
+            # Total: 2 + 45 (9 attrs x 5) + 17 padding = 64 bytes
+            response = bytearray([
+                0x83,       # header.type = ID_GET_ATTRIBUTES_VALUES
+                0x2d,       # header.length = 45 (9 attributes x 5 bytes)
+                # Attribute: ATTRIB_PRODUCT_ID (tag=1) = 0x1303 (SC2 BLE PID)
+                0x01, 0x03, 0x13, 0x00, 0x00,
+                # Attribute: ATTRIB_CAPABILITIES (tag=2) = 0
+                0x02, 0x00, 0x00, 0x00, 0x00,
+                # Attribute: ATTRIB_BOOTLOADER_BUILD_TIME (tag=10)
+                0x0a, 0x2b, 0x12, 0xa9, 0x62,
+                # Attribute: ATTRIB_FIRMWARE_BUILD_TIME (tag=4)
+                0x04, 0xad, 0xf1, 0xe4, 0x65,
+                # Attribute: ATTRIB_BOARD_REVISION (tag=9) = 46
+                0x09, 0x2e, 0x00, 0x00, 0x00,
+                # Attribute: ATTRIB_CONNECTION_INTERVAL_IN_US (tag=11) = 4000
+                0x0b, 0xa0, 0x0f, 0x00, 0x00,
+                # Extended attributes (tags 13, 12, 14) = 0
+                0x0d, 0x00, 0x00, 0x00, 0x00,
+                0x0c, 0x00, 0x00, 0x00, 0x00,
+                0x0e, 0x00, 0x00, 0x00, 0x00,
+                # Zero padding to 64 bytes (17 zeros)
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00,
+            ])
             print(f"[DIAG] 🎮 → Responding to GET_ATTRIBUTES with synthetic SC2 device info")
 
         elif cmd == self.SC2_CMD_GET_SERIAL:
-            # GET_SERIAL (0xAE) — Return serial number
-            response[0] = 0x01       # Message type
-            response[1] = 0xAE       # Echo command
-            response[2] = 0x00       # Status: success
-            # Serial number as ASCII (10 chars)
+            # GET_SERIAL / GetStringAttribute (0xAE) — Real device response from InputPlumber.
+            # Format: [cmd_echo, length, type, serial_ascii..., padding]
             serial = b'SC2DECK001'
-            response[3:3+len(serial)] = serial
+            response = bytearray([
+                0xAE,       # header.type = GetStringAttribute
+                0x14,       # header.length = 20 (serial data length)
+                0x01,       # string type
+            ])
+            response += serial
+            response += bytearray(64 - len(response))  # pad to 64
             print(f"[DIAG] 🎮 → Responding to GET_SERIAL with '{serial.decode()}'")
 
         elif cmd == self.SC2_CMD_CLEAR_MAPPINGS:
-            # CLEAR_MAPPINGS (0x81) — Acknowledge
-            response[0] = 0x01
-            response[1] = 0x81
-            response[2] = 0x00       # Status: success
+            # CLEAR_MAPPINGS (0x81) — Echo back with proper header
+            response = bytearray([
+                0x81,       # header.type = ClearDigitalMappings
+                0x00,       # header.length = 0
+            ])
+            response += bytearray(64 - len(response))
             print(f"[DIAG] 🎮 → Acknowledging CLEAR_MAPPINGS")
 
         elif cmd == self.SC2_CMD_SET_ATTRIBUTES:
-            # SET_ATTRIBUTES (0x87) — Acknowledge
-            response[0] = 0x01
-            response[1] = 0x87
-            response[2] = 0x00       # Status: success
-            print(f"[DIAG] 🎮 → Acknowledging SET_ATTRIBUTES")
+            # SET_ATTRIBUTES (0x87) — Write-only command, no GET_REPORT response needed.
+            # Just acknowledge the write is sufficient. Do NOT store a pending response.
+            print(f"[DIAG] 🎮 → SET_SETTINGS write received (register=0x{value[3]:02x}, value=0x{value[4]:02x}{value[5]:02x})" if len(value) > 5 else f"[DIAG] 🎮 → SET_SETTINGS write received (len={len(value)})")
+            return  # Don't store a response — this is write-only
 
         elif cmd == self.SC2_CMD_SET_MODE:
-            # SET_MODE (0x85) — Handle mode switch, also acknowledge
+            # SET_MODE (0x85) — Handle mode switch, echo back with proper header
             self._handle_mode_switch(value)
-            response[0] = 0x01
-            response[1] = 0x85
-            response[2] = 0x00       # Status: success
+            response = bytearray([
+                0x85,       # header.type = SetDefaultDigitalMappings
+                0x00,       # header.length = 0
+            ])
+            response += bytearray(64 - len(response))
             print(f"[DIAG] 🎮 → Acknowledging SET_MODE")
 
         else:
-            # Unknown command — echo it back with success status
-            response[0] = 0x01
-            response[1] = cmd
-            response[2] = 0x00       # Status: success
-            print(f"[DIAG] 🎮 → Unknown SC2 command 0x{cmd:02x}, echoing with success status")
+            # Unknown command — echo back with proper header format
+            response = bytearray([
+                cmd,        # header.type = command echo
+                0x00,       # header.length = 0
+            ])
+            response += bytearray(64 - len(response))
+            print(f"[DIAG] 🎮 → Unknown SC2 command 0x{cmd:02x}, echoing with zero payload")
 
         self._pending_fr_response[report_id] = bytes(response)
 
