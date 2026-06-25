@@ -77,32 +77,40 @@ Same as 0x45 but adds full quaternion (4 × 16-bit) to the IMU data.
 
 ## Button Bitmask (32-bit)
 
+**Verified from SDL3 `SDL_hidapi_steam_triton.c` TritonButtons enum.**
+
 ```
 Bit 0:  A
 Bit 1:  B
 Bit 2:  X
 Bit 3:  Y
-Bit 4:  Left Bumper
-Bit 5:  Right Bumper
-Bit 6:  Left Grip
-Bit 7:  Right Grip
-Bit 8:  Start
-Bit 9:  Steam
-Bit 10: Left Pad Click
-Bit 11: Right Pad Click
-Bit 12: Left Stick Click
-Bit 13: Right Stick Click (reserved)
-Bit 14: Left D-Pad Up
-Bit 15: Left D-Pad Down
-Bit 16: Left D-Pad Left
-Bit 17: Left D-Pad Right
-Bit 18: Right D-Pad Up
-Bit 19: Right D-Pad Down
-Bit 20: Right D-Pad Left
-Bit 21: Right D-Pad Right
-Bit 22: Left Trackpad Touch
-Bit 23: Right Trackpad Touch
-Bit 24-31: Reserved / Extended
+Bit 4:  QAM (Quick Access Menu / ...)
+Bit 5:  R3 (Right Stick Click)
+Bit 6:  View (Options / Select)
+Bit 7:  R4 (Right Paddle 1)
+Bit 8:  R5 (Right Paddle 2)
+Bit 9:  R (Right Bumper)
+Bit 10: D-Pad Down
+Bit 11: D-Pad Right
+Bit 12: D-Pad Left
+Bit 13: D-Pad Up
+Bit 14: Menu
+Bit 15: L3 (Left Stick Click)
+Bit 16: Steam
+Bit 17: L4 (Left Paddle 1)
+Bit 18: L5 (Left Paddle 2)
+Bit 19: L (Left Bumper)
+Bit 20: Right Joystick Touch (capacitive)
+Bit 21: Right Trackpad Touch
+Bit 22: Right Trackpad Click
+Bit 23: Right Trigger Click (binary threshold)
+Bit 24: Left Joystick Touch (capacitive)
+Bit 25: Left Trackpad Touch
+Bit 26: Left Trackpad Click
+Bit 27: Left Trigger Click (binary threshold)
+Bit 28: Right Grip Touch (capacitive)
+Bit 29: Left Grip Touch (capacitive)
+Bit 30-31: Reserved
 ```
 
 ## HID Descriptor (Vendor Interface)

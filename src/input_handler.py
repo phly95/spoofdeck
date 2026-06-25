@@ -14,20 +14,23 @@ except ImportError:
     HAS_EVDEV = False
 
 
+# Triton 32-bit button bitmask constants — from SDL3 SDL_hidapi_steam_triton.c
+# These map evdev button codes to the Triton SC2 32-bit bitmask positions.
 XBOX_TO_SC2_BUTTON = {
-    ecodes.BTN_SOUTH:  0x0001,
-    ecodes.BTN_EAST:   0x0002,
-    ecodes.BTN_NORTH:  0x0004,
-    ecodes.BTN_WEST:   0x0008,
-    ecodes.BTN_TL:     0x0010,
-    ecodes.BTN_TR:     0x0020,
-    ecodes.BTN_SELECT: 0x0040,
-    ecodes.BTN_START:  0x0080,
-    ecodes.BTN_MODE:   0x0100,
-    ecodes.BTN_THUMBL: 0x0200,
-    ecodes.BTN_THUMBR: 0x0400,
+    ecodes.BTN_SOUTH:  0x00000001,  # bit 0: A
+    ecodes.BTN_EAST:   0x00000002,  # bit 1: B
+    ecodes.BTN_NORTH:  0x00000004,  # bit 2: X
+    ecodes.BTN_WEST:   0x00000008,  # bit 3: Y
+    ecodes.BTN_TL:     0x00080000,  # bit 19: Left Bumper
+    ecodes.BTN_TR:     0x00000200,  # bit 9: Right Bumper
+    ecodes.BTN_SELECT: 0x00004000,  # bit 14: Menu (right button) → Back/Select
+    ecodes.BTN_START:  0x00000040,  # bit 6: View (left button) → Start
+    ecodes.BTN_MODE:   0x00010000,  # bit 16: Steam
+    ecodes.BTN_THUMBL: 0x00008000,  # bit 15: L3
+    ecodes.BTN_THUMBR: 0x00000020,  # bit 5: R3
 }
 
+# Standard HID gamepad DPad positions (for 12-byte evdev path, bits 11-14)
 DPAD_UP    = 0x0800
 DPAD_DOWN  = 0x1000
 DPAD_LEFT  = 0x2000
@@ -142,6 +145,7 @@ class InputHandler:
         btn10 = raw[10]
         btn11 = raw[11]
         btn13 = raw[13]
+        btn14 = raw[14]
 
         b = 0
         # Byte 8:
@@ -209,27 +213,37 @@ class InputHandler:
         report.right_trigger = right_trigger
 
         # --- 45-byte SC2 BLE Custom Report (Report 0x45) ---
+        # Triton 32-bit button bitmask — from SDL3 src/joystick/hidapi/SDL_hidapi_steam_triton.c
+        # Neptune byte layout: see linux/drivers/hid/hid-steam.c steam_do_deck_input_event()
         b32 = 0
         if btn8 & 0x80: b32 |= (1 << 0)   # A
         if btn8 & 0x20: b32 |= (1 << 1)   # B
         if btn8 & 0x40: b32 |= (1 << 2)   # X
         if btn8 & 0x10: b32 |= (1 << 3)   # Y
-        if btn8 & 0x08: b32 |= (1 << 4)   # L1
-        if btn8 & 0x04: b32 |= (1 << 5)   # R1
-        if (btn13 & 0x02) or (btn9 & 0x80): b32 |= (1 << 6)  # Left Grip
-        if (btn13 & 0x04) or (btn10 & 0x01): b32 |= (1 << 7) # Right Grip
-        if btn9 & 0x10: b32 |= (1 << 8)   # Start / Options
-        if btn9 & 0x20: b32 |= (1 << 9)   # Steam
-        if btn10 & 0x02: b32 |= (1 << 10)  # LPad Click
-        if btn10 & 0x04: b32 |= (1 << 11)  # RPad Click
-        if btn10 & 0x40: b32 |= (1 << 12)  # L3
-        if btn11 & 0x04: b32 |= (1 << 13)  # R3
-        if btn9 & 0x01: b32 |= (1 << 14)   # Dpad Up
-        if btn9 & 0x08: b32 |= (1 << 15)   # Dpad Down
-        if btn9 & 0x04: b32 |= (1 << 16)   # Dpad Left
-        if btn9 & 0x02: b32 |= (1 << 17)   # Dpad Right
-        if btn10 & 0x08: b32 |= (1 << 22)  # LPad Touch
-        if btn10 & 0x10: b32 |= (1 << 23)  # RPad Touch
+        if btn14 & 0x04: b32 |= (1 << 4)  # QAM (Quick Access Menu)
+        if btn11 & 0x04: b32 |= (1 << 5)  # R3
+        if btn9 & 0x40: b32 |= (1 << 6)   # View / Options (left button, two squares)
+        if btn13 & 0x04: b32 |= (1 << 7)  # R4 (Right Paddle 1)
+        if btn10 & 0x01: b32 |= (1 << 8)  # R5 (Right Paddle 2)
+        if btn8 & 0x04: b32 |= (1 << 9)   # R (Right Bumper)
+        if btn9 & 0x08: b32 |= (1 << 10)  # DPad Down
+        if btn9 & 0x02: b32 |= (1 << 11)  # DPad Right
+        if btn9 & 0x04: b32 |= (1 << 12)  # DPad Left
+        if btn9 & 0x01: b32 |= (1 << 13)  # DPad Up
+        if btn9 & 0x10: b32 |= (1 << 14)  # Menu (right button, three lines)
+        if btn10 & 0x40: b32 |= (1 << 15) # L3
+        if btn9 & 0x20: b32 |= (1 << 16)  # Steam
+        if btn13 & 0x02: b32 |= (1 << 17) # L4 (Left Paddle 1)
+        if btn9 & 0x80: b32 |= (1 << 18)  # L5 (Left Paddle 2)
+        if btn8 & 0x08: b32 |= (1 << 19)  # L (Left Bumper)
+        if btn13 & 0x80: b32 |= (1 << 20) # Right Joystick Touch
+        if btn10 & 0x10: b32 |= (1 << 21) # Right Touchpad Touch
+        if btn10 & 0x04: b32 |= (1 << 22) # Right Touchpad Click
+        if btn8 & 0x02: b32 |= (1 << 23)  # Right Trigger Click
+        if btn13 & 0x40: b32 |= (1 << 24) # Left Joystick Touch
+        if btn10 & 0x08: b32 |= (1 << 25) # Left Touchpad Touch
+        if btn10 & 0x02: b32 |= (1 << 26) # Left Touchpad Click
+        if btn8 & 0x01: b32 |= (1 << 27)  # Left Trigger Click
 
         lpad_x = struct.unpack_from('<h', raw, 16)[0]
         lpad_y = struct.unpack_from('<h', raw, 18)[0]
