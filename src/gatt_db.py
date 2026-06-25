@@ -387,6 +387,26 @@ class GattDatabase:
             0x81, 0x00,        #   Input (Data,Ary,Abs)  ; Key array (6 bytes)
             0xC0,              # End Collection
 
+            # --- SC2 Custom Input (Report ID 0x45, 45 bytes) ---
+            0x06, 0x00, 0xFF,  # Usage Page (Vendor Defined 0xFF00)
+            0x09, 0x45,        # Usage (0x45)
+            0xA1, 0x01,        # Collection (Application)
+            0x85, 0x45,        #   Report ID (0x45)
+            0x75, 0x08,        #   Report Size (8)
+            0x95, 0x2D,        #   Report Count (45)
+            0x81, 0x02,        #   Input (Data,Var,Abs)
+            0xC0,              # End Collection
+
+            # --- SC2 Custom Input (Report ID 0x47, 47 bytes) ---
+            0x06, 0x00, 0xFF,  # Usage Page (Vendor Defined 0xFF00)
+            0x09, 0x47,        # Usage (0x47)
+            0xA1, 0x01,        # Collection (Application)
+            0x85, 0x47,        #   Report ID (0x47)
+            0x75, 0x08,        #   Report Size (8)
+            0x95, 0x2F,        #   Report Count (47)
+            0x81, 0x02,        #   Input (Data,Var,Abs)
+            0xC0,              # End Collection
+
         ])
 
 
