@@ -649,9 +649,9 @@ class HoGPeripheral:
         if self._report_handle:
             handle_names[self._report_handle] = "Gamepad (0x0012)"
         if self._mouse_report_handle:
-            handle_names[self._mouse_report_handle] = "Mouse (0x0019)"
+            handle_names[self._mouse_report_handle] = "Mouse (0x001c)"
         if self._keyboard_report_handle:
-            handle_names[self._keyboard_report_handle] = "Keyboard (0x001d)"
+            handle_names[self._keyboard_report_handle] = "Keyboard (0x0020)"
         if self._sc2_report_handle:
             handle_names[self._sc2_report_handle] = f"SC2 Custom (0x{self._sc2_report_handle:04x})"
 
