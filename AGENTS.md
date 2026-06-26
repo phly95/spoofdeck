@@ -95,6 +95,8 @@ Make a **Steam Deck** present itself as a **Steam Controller 2026 (SC2)** over *
 - **Encryption error** — `set_report_cb() Error: Encryption Key Size is insufficient` persists even without BT_SECURITY_MEDIUM. BlueZ HOG profile internal issue — SET_REPORT fails, blocking feature report handshake. Confirmed pre-existing (tested old commit `1b6bfde`).
 - **Input not reaching Steam** — controller registers briefly then dies. No stable input.
 
+**NOTE (2026-06-26 evening)**: After host PC reboot, input IS flowing. The stale BlueZ state from previous sessions was blocking SET_REPORT. A reboot cleared it. This explains why the issues appeared pre-existing — the cached state persisted across code deploys.
+
 ### What Needs to Happen Next
 
 1. **Fix Zombie Disconnect (PRIMARY BLOCKER)** — The identity slot at `controller+slot*0xe8+0x200` must be populated before the zombie timer fires (~10s). Feature report WRITE commands arrive ~150s after connection — too late. Need to either:

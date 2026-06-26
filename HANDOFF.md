@@ -109,14 +109,13 @@ We present the **Steam Deck** as a **Steam Controller 2026 (SC2 / Triton)** over
 
 ### 2. Fix Encryption Error (SECONDARY BLOCKER)
 - **Status**: `set_report_cb() Error: Encryption Key Size is insufficient` blocks SET_REPORT. This is a BlueZ HOG profile internal issue — not caused by our code. Confirmed PRE-EXISTING (tested old commit `1b6bfde`).
+- **BREAKTHROUGH (2026-06-26 evening)**: After host PC reboot, input IS flowing. The stale BlueZ state from previous sessions was blocking SET_REPORT. A reboot cleared it. This explains why the issues appeared pre-existing — the cached state persisted across code deploys.
+- **Root cause**: Stale bonding keys, LTK, or HOG profile state from previous BLE sessions was cached by BlueZ. When a new connection was established, BlueZ tried to use the old state, causing SET_REPORT to fail with "Encryption Key Size is insufficient".
+- **Fix**: Reboot the host PC to clear BlueZ cache. Or: `bluetoothctl remove C2:12:34:56:78:9A` + restart bluetooth service.
 - **What we tried**:
   - Removed `BT_SECURITY_MEDIUM` from att_server.py — error persists
-  - Tested old version — same error
-- **Impact**: SET_REPORT fails → feature report handshake can't complete → identity slot never populated
-- **What to try next**:
-  1. Investigate BlueZ's HOG profile encryption requirements
-  2. Consider bypassing BlueZ's HOG entirely (custom uhid driver?)
-  3. Check if the error is actually blocking SET_REPORT or just a warning
+  - Tested old version — same error (because stale state was still cached)
+  - Rebooted host PC — error cleared, input works
 
 ### 3. GET_SERIAL Format (FIXED)
 - **Status**: FIXED in current commit. byte[1] changed from 0x14 to 0x15 (matches write command). Serial must start with 'F' (0x46) to pass V_strncmp validation at 0x26b1ac0.
