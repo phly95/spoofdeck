@@ -169,7 +169,7 @@ We present the **Steam Deck** as a **Steam Controller 2026 (SC2 / Triton)** over
 - **SDL_hid_send_feature_report**: Resolved via dlsym at 0x01760fa2, stored at 0x02c69a28.
 - **0xf2 command**: Per-category capability query dispatched via switch/case. Response format: `[0xf2, category, length, data...]`.
 - **Encryption error**: `set_report_cb() Error: Encryption Key Size is insufficient` is PRE-EXISTING. Persists without BT_SECURITY_MEDIUM. BlueZ HOG profile internal issue.
-- **RE session files**: ~/steamclient-reverse-session/ contains findings.md, functions/, notes/
+- **RE session files**: research/steamclient-reverse-session/ contains findings.md, functions/, notes/
   - `functions/controller_identity_check.c` — 0x1070620 disassembly (7-check gate)
   - `functions/registration_data_flow.c` — What data registration needs from ATT server
   - `functions/zombie_disconnect.c` — Zombie check conditions (state-based, not timer)

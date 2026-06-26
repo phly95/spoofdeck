@@ -29,7 +29,7 @@ Steps:
 2. [What to look for]
 3. [What to save]
 
-Save to: ~/steamclient-reverse-session/functions/[name].c
+Save to: research/steamclient-reverse-session/functions/[name].c
 
 ### 2. [QUESTION] (CRITICAL/HIGH/MEDIUM)
 
@@ -60,7 +60,7 @@ r2 -q -c 'aa; axt @ 0xADDR' BINARY 2>/dev/null
 
 ## Workspace
 
-Use ~/steamclient-reverse-session/ — update findings.md, save code to functions/.
+Use research/steamclient-reverse-session/ — update findings.md, save code to functions/.
 
 ## Stop Condition
 
@@ -120,7 +120,7 @@ Read [FILE] and answer these questions about [TOPIC].
 
 [Why these questions matter — 2-3 sentences]
 
-Save answers to: ~/steamclient-reverse-session/functions/[name].c
+Save answers to: research/steamclient-reverse-session/functions/[name].c
 
 ## Stop Condition
 
@@ -192,7 +192,7 @@ Steps:
 3. What value does it return — 1, 4, or something else?
 4. If it returns something other than 1/4, why?
 
-Save to: ~/steamclient-reverse-session/functions/zombie_connection_state.c
+Save to: research/steamclient-reverse-session/functions/zombie_connection_state.c
 
 ### 2. What Sets the Per-Slot Flag at 0x10b4? (MEDIUM)
 
@@ -203,7 +203,7 @@ Steps:
 2. What condition sets/clears this flag?
 3. Is it set when input reports flow?
 
-Save to: ~/steamclient-reverse-session/functions/zombie_flag_0x10b4.c
+Save to: research/steamclient-reverse-session/functions/zombie_flag_0x10b4.c
 
 ## Stop Condition
 
