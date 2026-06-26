@@ -88,9 +88,10 @@ Make a **Steam Deck** present itself as a **Steam Controller 2026 (SC2)** over *
 
 ### What Needs to Happen Next
 
-1. **Steam Controller 2026 Recognition** — Currently detected as a generic controller. The CHR_REPORT vendor-defined HID Report Map entries change the kernel's uhid device type. Need to investigate how InputPlumber's host-side driver reads from the Valve Custom HID Service directly (bypassing hog-ll), or find a way to make hog-ll forward Valve Custom Service data.
-2. **Trackpad/IMU Forwarding in Gamepad Mode** — Update `src/input_handler.py` to map Neptune's dual trackpad coordinates and IMU (gyro/accelerometer) data into the custom 45-byte/47-byte SC2 report format.
-3. **Daemon Auto-Reconnect** — Ensure the Deck automatically restarts advertising and accepts connections cleanly upon host reconnects.
+1. **Fix SET_SETTINGS Handshake Loop** — After the initial handshake (GET_ATTRIBUTES → GET_SERIAL → SET_SETTINGS → CLEAR_MAPPINGS), Steam falls into a retry loop on SET_SETTINGS register 0x09 (LIZARD_MODE). The `BYieldingCompleteSteamControllerRegistration` flow blocks at `EYldWaitForControllerDetails`. Need to investigate what response format Steam expects, or what notification triggers it to proceed.
+2. **Investigate Unknown Command 0xf2** — This command is sent 8 times during the initial handshake. Our zero-payload echo may be wrong. Need to determine the correct response.
+3. **Fix Handshake Repetition** — The GET_ATTRIBUTES → 0xf2 × 8 → GET_SERIAL → SET_SETTINGS sequence repeats, suggesting a response is wrong. Need to identify which response causes Steam to restart the handshake.
+4. **Haptic Feedback** — The haptic output report (0x80) is defined in the GATT database, but hog-ll doesn't forward output report writes to our ATT server. Need to find an alternative mechanism or patch hog-ll.
 
 ### Files You Must Read Before Making Changes
 
