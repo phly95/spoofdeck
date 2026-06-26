@@ -155,13 +155,10 @@ class AttServer:
         """Create and bind the raw L2CAP ATT socket."""
         self.sock = socket.socket(AF_BLUETOOTH, socket.SOCK_SEQPACKET, BTPROTO_L2CAP)
 
-        # Set security level to Medium to require encryption for the ATT channel
-        try:
-            optval = struct.pack('BB', BT_SECURITY_MEDIUM, 0)
-            self.sock.setsockopt(SOL_BLUETOOTH, BT_SECURITY, optval)
-            print(f"[att] Socket security level set to BT_SECURITY_MEDIUM")
-        except Exception as e:
-            print(f"[att] Warning: failed to set socket security: {e}")
+        # NOTE: Do NOT set BT_SECURITY_MEDIUM — it causes BlueZ HOG profile
+        # to require encryption for SET_REPORT, resulting in
+        # "Encryption Key Size is insufficient" errors. BT_SECURITY_LOW
+        # allows unencrypted ATT operations which is what we need.
 
         # Build sockaddr_l2: family(2) + psm(2) + bdaddr(6) + cid(2) + addr_type(1)
         addr_bytes = bytes.fromhex(self.address.replace(':', ''))[::-1]

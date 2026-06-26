@@ -230,80 +230,13 @@ class HoGPeripheral:
         
         BlueZ's hog-lib.c sends ATT Read Requests for Feature Report 0x00
         during GATT discovery, BEFORE Steam sends any SET_REPORT commands.
-        These reads happen at connection time. If we don't have responses
-        ready, the reads return zeros and the identity slot is never populated.
         
-        We pre-generate all the responses that Steam's initial handshake
-        expects, so when GATT discovery reads FR 0x00, we return valid data.
+        We return zeros — Steam's feature report processing will handle the
+        actual handshake when it opens the controller. Returning synthetic
+        data during GATT discovery may confuse the UHID device setup.
         """
-        import struct
-
-        # Response 1: GET_ATTRIBUTES (0x83) — 62 bytes
-        get_attributes = bytearray([
-            0x83,       # command echo
-            0x2d,       # attribute byte count (45 = 9 × 5)
-            # Attribute: ATTRIB_PRODUCT_ID (tag=1) = 0x1303
-            0x01, 0x03, 0x13, 0x00, 0x00,
-            # Attribute: ATTRIB_CAPABILITIES (tag=2) = 0x4169bfff
-            0x02, 0xff, 0xbf, 0x69, 0x41,
-            # Attribute: ATTRIB_BOOTLOADER_BUILD_TIME (tag=10)
-            0x0a, 0x2b, 0x12, 0xa9, 0x62,
-            # Attribute: ATTRIB_FIRMWARE_BUILD_TIME (tag=4)
-            0x04, 0xad, 0xf1, 0xe4, 0x65,
-            # Attribute: ATTRIB_BOARD_REVISION (tag=9) = 46
-            0x09, 0x2e, 0x00, 0x00, 0x00,
-            # Attribute: ATTRIB_CONNECTION_INTERVAL_IN_US (tag=11) = 4000
-            0x0b, 0xa0, 0x0f, 0x00, 0x00,
-            # Extended attributes (tags 13, 12, 14) = 0
-            0x0d, 0x00, 0x00, 0x00, 0x00,
-            0x0c, 0x00, 0x00, 0x00, 0x00,
-            0x0e, 0x00, 0x00, 0x00, 0x00,
-            # Zero padding to 62 bytes
-        ])
-        get_attributes += bytearray(62 - len(get_attributes))
-
-        # Response 2: 0xf2 category 1 — capabilities
-        xf2_cat1 = bytearray([
-            0xf2,       # command echo
-            0x01,       # category
-            0x04,       # length = 4 bytes
-            0xff, 0xbf, 0x69, 0x41,  # capabilities bitmask (LE)
-        ])
-        xf2_cat1 += bytearray(62 - len(xf2_cat1))
-
-        # Response 3: GET_SERIAL (0xAE) — 23 bytes
-        # First byte MUST be 'F' (0x46) to pass validation at 0x26b1ac0
-        serial = b'F0000-0000-00000000'  # 19 chars + null = 20 bytes
-        get_serial = bytearray([
-            0xAE,       # command echo
-            0x15,       # payload length (matches write command byte[1])
-            0x01,       # success status
-        ])
-        get_serial += serial[:20].ljust(20, b'\x00')
-
-        # Response 4: 0xf2 category 2 — settings
-        xf2_cat2 = bytearray([
-            0xf2,       # command echo
-            0x02,       # category
-            0x00,       # num registers (empty)
-        ])
-        xf2_cat2 += bytearray(62 - len(xf2_cat2))
-
-        # Store all responses — when BlueZ reads FR 0x00 during GATT discovery,
-        # it will get the FIRST pending response (GET_ATTRIBUTES).
-        # When Steam reads FR 0x00 after writing commands, it will get
-        # the appropriate response.
-        self._pending_fr_response[0x00] = bytes(get_attributes)
-
-        # Also store in a queue for sequential reads
-        self._fr_response_queue = [
-            bytes(get_attributes),
-            bytes(xf2_cat1),
-            bytes(get_serial),
-            bytes(xf2_cat2),
-        ]
-
-        print(f"[+] Pre-populated FR 0x00 responses for GATT discovery")
+        self._fr_response_queue = []
+        print(f"[+] Pre-populated FR 0x00 responses (zeros) for GATT discovery")
 
     def _on_haptic_write(self, handle, value):
         """Handle writes to the SC2 output report characteristic.
