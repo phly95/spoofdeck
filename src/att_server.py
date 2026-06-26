@@ -41,6 +41,7 @@ BDADDR_LE_RANDOM = 0x02
 SOL_BLUETOOTH = 274
 BT_SECURITY = 4
 BT_SECURITY_LOW = 1
+BT_SECURITY_MEDIUM = 2
 
 # Load libc for ctypes bind
 _libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
@@ -92,6 +93,8 @@ class AttServer:
             try:
                 self.conn, self.conn_addr = self.sock.accept()
                 print(f"[att] Client connected: {self.conn_addr}")
+
+
                 
                 # Reset MTU to default for new connection
                 self.mtu = 23
@@ -151,6 +154,14 @@ class AttServer:
     def _create_socket(self):
         """Create and bind the raw L2CAP ATT socket."""
         self.sock = socket.socket(AF_BLUETOOTH, socket.SOCK_SEQPACKET, BTPROTO_L2CAP)
+
+        # Set security level to Medium to require encryption for the ATT channel
+        try:
+            optval = struct.pack('BB', BT_SECURITY_MEDIUM, 0)
+            self.sock.setsockopt(SOL_BLUETOOTH, BT_SECURITY, optval)
+            print(f"[att] Socket security level set to BT_SECURITY_MEDIUM")
+        except Exception as e:
+            print(f"[att] Warning: failed to set socket security: {e}")
 
         # Build sockaddr_l2: family(2) + psm(2) + bdaddr(6) + cid(2) + addr_type(1)
         addr_bytes = bytes.fromhex(self.address.replace(':', ''))[::-1]
@@ -341,12 +352,15 @@ class AttServer:
 
     def _handle_read(self, data):
         """Handle Read Request (0x0A)."""
+        import time
+        ts = time.strftime('%H:%M:%S')
         opcode = data[0]
         handle = struct.unpack('<H', data[1:3])[0]
 
+        print(f"[att] [{ts}] Read Request: handle=0x{handle:04x}")
         value = self.db.read_attribute(handle)
         if value is None:
-            print(f"[att] Read FAILED: handle=0x{handle:04x} -> ERR_INVALID_HANDLE")
+            print(f"[att] [{ts}] Read FAILED: handle=0x{handle:04x} -> ERR_INVALID_HANDLE")
             self._send_error(opcode, handle, ATT_ERR_INVALID_HANDLE)
             return
 

@@ -298,14 +298,19 @@ class HoGPeripheral:
         synthetic response from the last command write. For other FRs,
         proxy to Neptune if available.
         """
+        import time, traceback
+        ts = time.strftime('%H:%M:%S')
+        print(f"[DIAG] [{ts}] 📤 FR 0x{report_id:02x} READ called — pending keys: {list(self._pending_fr_response.keys())}")
+        traceback.print_stack(limit=5)
+
         # SC2 command channels — return synthetic response
         if report_id in (0x00, 0x01):
             response = self._pending_fr_response.pop(report_id, None)
             if response:
-                print(f"[DIAG] 📤 FR 0x{report_id:02x} READ → returning synthetic response: {response[:20].hex()}...")
+                print(f"[DIAG] [{ts}] 📤 FR 0x{report_id:02x} READ → returning synthetic response: {response[:20].hex()}...")
                 return response
             else:
-                print(f"[DIAG] 📤 FR 0x{report_id:02x} READ → no pending response, returning zeros")
+                print(f"[DIAG] [{ts}] 📤 FR 0x{report_id:02x} READ → no pending response, returning zeros")
                 return b'\x00' * 64
 
         # Other Feature Reports — proxy to Neptune hardware
@@ -317,7 +322,9 @@ class HoGPeripheral:
         For FR 0x00 and 0x01, parse the SC2 command and generate a synthetic
         response. For FR 0x85, handle the mode switch. For others, proxy to Neptune.
         """
-        print(f"[DIAG] ⭐ FEATURE REPORT WRITE: ID=0x{report_id:02x} len={len(value)} data={value[:20].hex()}{'...' if len(value) > 20 else ''}")
+        import time
+        ts = time.strftime('%H:%M:%S')
+        print(f"[DIAG] [{ts}] ⭐ FEATURE REPORT WRITE: ID=0x{report_id:02x} len={len(value)} data={value[:20].hex()}{'...' if len(value) > 20 else ''}")
 
         if report_id == 0x85:
             self._handle_mode_switch(value)
@@ -449,8 +456,13 @@ class HoGPeripheral:
             # to verify the write succeeded. Store a success response.
             register = value[3] if len(value) > 3 else 0
             payload_len = value[2] if len(value) > 2 else 0
-            data_val = value[4:4+payload_len] if len(value) >= 4 + payload_len else value[4:6]
+            
+            # The value data starts at offset 4, and its length is payload_len - 1
+            # (since payload_len includes the 1-byte register).
+            val_len = max(0, payload_len - 1)
+            data_val = value[4:4+val_len] if len(value) >= 4 + val_len else value[4:6]
             print(f"[DIAG] 🎮 → SET_SETTINGS register=0x{register:02x} payload_len={payload_len} data={data_val.hex()}")
+            
             # Store the setting so GET_SETTINGS_VALUES can return it
             if len(data_val) >= 2:
                 self._settings_store[register] = struct.unpack_from('<H', data_val)[0]
@@ -458,10 +470,11 @@ class HoGPeripheral:
                 self._settings_store[register] = data_val[0]
             else:
                 self._settings_store[register] = 0
+                
             # Respond with command echo + register echo + value echo
             response = bytearray([
                 0x87,       # header.type = ID_SET_SETTINGS_VALUES
-                payload_len + 1,  # header.length = register(1) + value
+                payload_len,  # header.length = register(1) + value
                 register,
             ])
             response += data_val
@@ -543,6 +556,7 @@ class HoGPeripheral:
             print(f"[DIAG] 🎮 → Unknown SC2 command 0x{cmd:02x}, echoing with zero payload")
 
         self._pending_fr_response[report_id] = bytes(response)
+        print(f"[DIAG] 📥 FR 0x{report_id:02x} STORED: len={len(response)} first10={response[:10].hex()} pending_keys={list(self._pending_fr_response.keys())}")
 
     def _proxy_feature_read(self, report_id):
         """Proxy a Feature Report read to Neptune hardware (for non-SC2 reports)."""
