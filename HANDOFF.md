@@ -75,42 +75,32 @@ We present the **Steam Deck** as a **Steam Controller 2026 (SC2 / Triton)** over
 ## 3. What Needs to be Done
 
 ### 1. Fix SET_SETTINGS Register 0x09 Verification Loop (PRIMARY BLOCKER)
-- **Status**: Steam sends SET_SETTINGS 0x09 (lizard mode OFF) every 3 seconds. **Steam NEVER reads FR 0x00 back to verify** — zero ATT Read Requests observed in btmon and Deck logs. The verification path in `vtable[0x130]` (get_feature_report) is never triggered. Root cause likely the `set_report_cb()` error putting BlueZ's HOG profile in a broken state where it cannot send feature report reads.
+- **Status**: This is NOT a haptics issue — it blocks ALL functionality (input, gyro, trackpads, haptics) because controller registration never completes. Steam sends SET_SETTINGS 0x09 (lizard mode OFF) and **the verification read never happens** — zero ATT Read Requests follow the SET_SETTINGS write. However, the full handshake DOES work: GET_ATTRIBUTES (0x83), 0xf2, GET_SERIAL (0xAE) all get write-then-read cycles (BlueZ sends real ATT Read Requests 0x0a to handle 0x0024). This proves the verification mechanism works — it just doesn't fire for SET_SETTINGS specifically. **The state machine at 0x010d466b should toggle between SEND and VERIFY, but never reaches VERIFY for SET_SETTINGS.** Root cause is likely that SET_SETTINGS uses a different IPC path than the verification read, or the state machine has a condition that prevents the toggle. **Known bug in response format**: `payload_len + 1` (line 464, main_l2cap.py) should be `payload_len` — length byte is 0x04 instead of 0x03.
 - **RE findings**: The SET_SETTINGS buffer format is `[0x01, 0x87, 0x03, register, value_lo, value_hi, ...]`. Register 0x09 = SETTING_LIZARD_MODE, value 0 = LIZARD_MODE_OFF. Lizard mode must be OFF for haptics to work. The verification reads FR 0x00 back and does a byte-by-byte comparison of the echoed command bytes.
-- **Known bug**: `payload_len + 1` (line 464, main_l2cap.py) should be `payload_len` — the SET_SETTINGS response length byte is 0x04 instead of 0x03.
-- **Critical log finding**: The write goes to handle 0x0024 (FR 0x00 value) with 65 bytes of data starting with `01 87 03 09 00 00...` (Report ID 0x01 at byte 0). The callback fires with report_id=0x00. No ATT Read Requests follow — the verification never reads FR 0x00.
 - **What to try next**:
-  1. Fix the `set_report_cb()` error — BlueZ returns ATT Error 0x0E when our ATT server can't handle a SET_REPORT write. This may be putting the HOG profile in a state where it can't send feature report reads.
-  2. Fix the `payload_len + 1` → `payload_len` bug
-  3. Add diagnostic logging to `_handle_write` to see which handle BlueZ tries to SET_REPORT on
-  4. Check if the HOG profile's pending SET_REPORT blocks all subsequent reads
+  1. Investigate why the state machine never reaches VERIFY for SET_SETTINGS — trace the binary at 0x010d4e1a to find the condition that prevents the toggle
+  2. Check if SET_SETTINGS uses a different IPC path than the verification read
+  3. Fix the `payload_len + 1` → `payload_len` bug (line 464, main_l2cap.py)
+  4. Check if the ControllerDetails_tE.ready_flag (offset 0x3c) is the real blocker
 
-### 2. Investigate `set_report_cb()` ATT Error on Host (LIKELY ROOT CAUSE)
-- **Status**: `hog-lib.c:set_report_cb() Error setting Report value: Request attribute has encountered an unlikely error` appears at connection time. btmon capture confirmed hog-ll discovers the output report handle (0x0019) but **never writes to it**. This error may put hog-ll in a state where it can't send output reports — explaining why zero ATT Write Command (0x52) packets are sent.
-- **What to try next**:
-  1. Determine which handle hog-ll is writing to when this error occurs (add diagnostic logging to `_handle_write`)
-  2. Check if the handle has correct permissions (added ATT_PROP_WRITE to output report characteristics)
-  3. Check if the error is related to the BLE path specifically (BLE vs USB code paths)
+### 2. `set_report_cb()` ATT Error (NOT THE ROOT CAUSE)
+- **Status**: The error is `ATT_ERR_INSUFFICIENT_ENCRYPTION_KEY_SIZE (0x0C)`, NOT 0x0E (Unlikely Error). This is a transient error — BlueZ clears the slot, replies to UHID, and continues. No degraded state, no blocked queue, no state machine affected. GET_REPORT works fine after the error. **This is NOT the root cause of the SET_SETTINGS loop.**
+- **What was confirmed**: BlueZ's HOG profile sends the error to UHID, which passes it to the kernel, which passes it to Steam. But the error doesn't block subsequent operations.
 
 ### 3. Haptic Feedback (HOST NOT SENDING)
 - **Status**: The haptic forwarding code is ready and correct — `_on_haptic_write()` on handle 0x0019 parses both 10-byte and 9-byte payloads. However, **the host never sends haptic output reports** — btmon capture confirmed zero ATT Write Command (0x52) packets during a test session. The issue is upstream in Steam/hog-ll.
 - **RE findings**: Haptics use `SDL_hid_write()` (output reports, NOT feature reports). Lizard mode must be OFF for haptics to work. The SET_SETTINGS 0x09 loop may be blocking haptics because Steam thinks lizard mode is still enabled.
 - **What to try next**:
-  1. Fix the `set_report_cb()` error — this may be blocking hog-ll from sending output reports
-  2. Fix the SET_SETTINGS 0x09 loop — lizard mode must be OFF for haptics
-  3. Get a real SC2 btmon capture to see the correct verification response
+  1. Fix the SET_SETTINGS 0x09 loop — lizard mode must be OFF for haptics
+  2. Get a real SC2 btmon capture to see the correct verification response
 
 ### 4. Dual Trackpads & IMU (Gyro/Accel) Forwarding
 - **Status**: 45-byte SC2 Custom report with trackpad X/Y, IMU (accel/gyro), and force sensors is **already implemented** in `input_handler.py`. The data flows correctly from Neptune HID → SC2 report.
 - **Remaining**: Steam may need specific settings enabled to activate gyro/trackpad features (registers 0x27 IMU_MODE, etc.).
 
-### 3. Auto-Reconnect Daemon
+### 5. Auto-Reconnect Daemon
 - **Status**: Advertising refresh on disconnect is **already implemented** in `main_l2cap.py:_schedule_adv_refresh()`.
 - **Remaining**: Ensure clean re-advertising after disconnects without manual intervention.
-
-### 4. SET_SETTINGS Loop (Known Blocker)
-- **Status**: Steam sends SET_SETTINGS 0x09 every 3 seconds. **Zero ATT Read Requests** — the verification never reads FR 0x00 back. The `BYieldingCompleteSteamControllerRegistration` flow blocks at `EYldWaitForControllerDetails`.
-- **Bug found**: `payload_len + 1` in SET_SETTINGS response should be `payload_len` (length byte 0x04 → 0x03).
 - **Root cause hypothesis**: The `set_report_cb()` ATT error (BlueZ returns 0x0E to a SET_REPORT Write Request) puts the HOG profile in a broken state where it cannot send feature report reads. This explains why the verification never reads FR 0x00.
 - **Key commands in the SC2 protocol flow**:
   1. `0x83` GET_ATTRIBUTES → response: `[0x83, 0x2D, 9 attributes x 5 bytes, padding]`
