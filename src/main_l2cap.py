@@ -190,6 +190,7 @@ class HoGPeripheral:
     SC2_CMD_GET_SETTINGS_VALUES    = 0x89
     SC2_CMD_GET_SETTINGS_DEFAULTS  = 0x8C
     SC2_CMD_SET_CONTROLLER_MODE    = 0x8D
+    SC2_CMD_GET_CHIP_ID            = 0xBA
     SC2_CMD_GET_SERIAL             = 0xAE
 
     def _setup_feature_report_callbacks(self):
@@ -394,6 +395,22 @@ class HoGPeripheral:
             response += serial
             response += bytearray(64 - len(response))  # pad to 64
             print(f"[DIAG] 🎮 → Responding to GET_SERIAL with '{serial.decode()}'")
+
+        elif cmd == self.SC2_CMD_GET_CHIP_ID:
+            # GET_CHIP_ID (0xBA) — Return chip ID (15-byte identifier)
+            # Format from InputPlumber: [0xBA, 0x11, 0x00, chip_id_15_bytes, padding]
+            chip_id = bytes([
+                0x4e, 0x58, 0x50, 0x35, 0x33, 0x37, 0x30, 0x30,
+                0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36,
+            ])  # "NXP5370000123456"
+            response = bytearray([
+                0xBA,       # header.type = GetChipId
+                0x11,       # header.length = 17
+                0x00,       # status
+            ])
+            response += chip_id
+            response += bytearray(64 - len(response))  # pad to 64
+            print(f"[DIAG] 🎮 → Responding to GET_CHIP_ID with chip ID")
 
         elif cmd == self.SC2_CMD_CLEAR_MAPPINGS:
             # CLEAR_MAPPINGS (0x81) — Echo back with proper header
