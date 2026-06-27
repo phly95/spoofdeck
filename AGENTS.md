@@ -515,8 +515,19 @@ Sticks, triggers, trackpads, IMU — see `docs/sc2-protocol.md` for full format.
 6. **`btmgmt info` output is empty** — known SteamOS issue, ignore it
 7. **`steamos-readonly`** — must disable before modifying `/etc/`
 8. **KDE pairing dialog** — host shows dialog during pairing, user must click "yes"
-9. **Stale bonding keys cause `[Errno 38] ENOSYS`** — When the Deck's Bluetooth stack is restarted, its SMP pairing database is cleared, but the host still caches the old LTK. The host tries to encrypt with the stale key, the Deck rejects it, and the L2CAP socket is left in a broken state where `conn.recv()` returns `ENOSYS`. Fix: `bluetoothctl remove C2:12:34:56:78:9A` on the host, then re-pair.
+9. **Stale BlueZ state causes zombie disconnects / CCCD failures** — The host's BlueZ daemon caches pairing keys, CCCD states, and HOG profile state per-device. When the Deck's BT stack restarts (or code changes break the connection mid-session), this cached state becomes stale. Symptoms: zombie disconnects, CCCDs never enabled (notifications dropped), `CGetControllerInfoWorkItem::RunFunc: Read failure`, or `Encryption Key Size is insufficient` errors. **Fix (in order of escalation):**
+   - `bluetoothctl remove C2:12:34:56:78:9A` + reconnect (clears in-memory state only)
+   - Clear bond data + restart BlueZ daemon (clears persistent state):
+     ```
+     sudo rm -rf /var/lib/bluetooth/<HOST_BT_MAC>/C2:12:34:56:78:9A
+     sudo rm -rf /var/lib/bluetooth/cache
+     sudo systemctl restart bluetooth
+     ```
+     Then restart the Deck's sc2-hogp service to re-register the advertisement.
+   - Full host reboot (nuclear option — clears everything including kernel-level BLE state)
+   - **IMPORTANT**: `btusb` kernel module reset (`sudo rmmod btusb && sudo modprobe btusb`) does NOT fix this — the stale state is in BlueZ user-space, not the kernel driver.
 10. **hog-ll strips Report ID from output reports** — When the host writes an output report (e.g., haptic 0x80) to `/dev/hidrawN`, hog-ll strips the Report ID byte before sending the ATT Write Command (0x52). The `_on_haptic_write()` handler must parse the 9-byte payload without the 0x80 prefix (type at [0], left speed at [3], right speed at [6]).
+11. **Cumulative BlueZ state corruption** — Repeated connection failures (e.g., from code bugs sending bad ATT responses) can poison BlueZ's HOG driver state. The driver may stop re-enabling CCCDs on subsequent connections, even after `bluetoothctl remove`. The only fix is clearing bond data + restarting the daemon, or a full reboot. This is why testing with a broken code version can break ALL subsequent tests until the state is cleared.
 
 ---
 

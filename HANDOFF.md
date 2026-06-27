@@ -67,7 +67,13 @@ We present the **Steam Deck** as a **Steam Controller 2026 (SC2 / Triton)** over
 - **Haptic forwarding code ready** — `_on_haptic_write()` handler on handle 0x0019 correctly parses both 10-byte (with Report ID) and 9-byte (stripped) haptic payloads and forwards to Neptune. However, **the host never sends haptic output reports** — btmon capture confirmed zero ATT Write Command (0x52) packets. The issue is upstream in Steam/hog-ll.
 - **Feature Report Proxy to Neptune**: Non-SC2 Feature Reports proxied to Neptune hardware via `ioctl`.
 - **Steam Client SC2 Recognition**: Steam detects Type 10 (Neptune/SC2), ProductID 4867 (0x1303), loads `controller_neptune.vdf`, auto-registers controller. 45-byte SC2 Custom reports (Report ID 0x45) verified flowing to `/dev/hidrawN` via hexdump.
-- **Bonding Key Mismatch Fix**: After Deck BT restart, stale LTK on host causes `[Errno 38] ENOSYS` on `conn.recv()`. Fix: `bluetoothctl remove C2:12:34:56:78:9A` then re-pair.
+- **Bonding Key Mismatch Fix**: After Deck BT restart, stale LTK on host causes `[Errno 38] ENOSYS` on `conn.recv()`. Fix: `bluetoothctl remove C2:12:34:56:78:9A` then re-pair. For cumulative BlueZ state corruption (zombie disconnects, CCCDs not enabled), clear bond data:
+  ```
+  sudo rm -rf /var/lib/bluetooth/<HOST_BT_MAC>/C2:12:34:56:78:9A
+  sudo rm -rf /var/lib/bluetooth/cache
+  sudo systemctl restart bluetooth
+  ```
+  Then restart Deck's sc2-hogp service. Note: `rmmod btusb && modprobe btusb` does NOT fix this — stale state is in BlueZ user-space.
 - **Comprehensive Diagnostic Logging** (`[DIAG]` tagged).
 
 ---
