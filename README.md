@@ -119,10 +119,13 @@ evtest /dev/input/eventN
 
 ## Contributing
 
-Haptics are the main remaining challenge. If you want to help:
-- Read `docs/findings-backlog.md` for the full technical analysis
-- A real SC2 btmon capture would answer most remaining questions
-- The haptic translation code is in `main_l2cap.py` — the blocker is upstream in Steam
+**I don't own a real Steam Controller 2026.** This project was built through reverse engineering `steamclient.so` and Bluetooth protocol analysis. A real SC2 device would unlock:
+
+- **Haptics** — A btmon capture from a real SC2 would show exactly what haptic reports Steam sends, making translation straightforward
+- **Protocol refinements** — Verifying our synthetic command responses match a real device
+- **Edge cases** — Things only a real device would trigger
+
+If you have a real SC2 and want to help, start with `docs/findings-backlog.md` for the full technical analysis.
 
 ## Acknowledgments
 
