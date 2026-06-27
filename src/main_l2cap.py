@@ -359,7 +359,10 @@ class HoGPeripheral:
         self._proxy_feature_write(report_id, value)
 
     def _handle_mode_switch(self, value):
-        """Handle Feature Report 0x85 (mode switch between Lizard and Steam Input)."""
+        """Handle mode switch between Lizard and Steam Input.
+
+        Called from Feature Report 0x85 write and SC2 command 0x8D (SET_CONTROLLER_MODE).
+        """
         if len(value) > 0:
             mode = value[0]
             if len(value) >= 2 and value[0] == 0x85:
@@ -554,14 +557,23 @@ class HoGPeripheral:
             print(f"[DIAG] 🎮 → 0xf2 response: {response[:20].hex()}...")
 
         elif cmd == self.SC2_CMD_SET_DEFAULT_MAPPINGS:
-            # SET_MODE (0x85) — Handle mode switch, echo back with proper header
-            self._handle_mode_switch(value)
+            # SET_DEFAULT_DIGITAL_MAPPINGS (0x85) — Acknowledge, enter gamepad mode
             response = bytearray([
                 0x85,       # header.type = SetDefaultDigitalMappings
                 0x00,       # header.length = 0
             ])
             response += bytearray(64 - len(response))
-            print(f"[DIAG] 🎮 → Acknowledging SET_MODE")
+            print(f"[DIAG] 🎮 → Acknowledging SET_DEFAULT_MAPPINGS")
+
+        elif cmd == self.SC2_CMD_SET_CONTROLLER_MODE:
+            # SET_CONTROLLER_MODE (0x8D) — Handle mode switch, echo back
+            self._handle_mode_switch(value)
+            response = bytearray([
+                0x8D,       # header.type = SetControllerMode
+                0x00,       # header.length = 0
+            ])
+            response += bytearray(64 - len(response))
+            print(f"[DIAG] 🎮 → Acknowledging SET_CONTROLLER_MODE")
 
         else:
             # Unknown command — echo back with proper header format
