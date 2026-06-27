@@ -12,9 +12,18 @@
 
 set -euo pipefail
 
-DECK_HOST="deck@<DECK_IP>"
+# Load local configuration (not tracked by git)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [ -f "$SCRIPT_DIR/../pii.env" ]; then
+    source "$SCRIPT_DIR/../pii.env"
+else
+    echo "ERROR: pii.env not found. Copy pii.env.example to pii.env and fill in your values."
+    exit 1
+fi
+
+DECK_HOST="$DECK_USER@$DECK_IP"
 SSH_OPTS="-o StrictHostKeyChecking=no"
-SSH_CMD="sshpass -p <DECK_PASSWORD> ssh $SSH_OPTS $DECK_HOST"
+SSH_CMD="sshpass -p $DECK_PASSWORD ssh $SSH_OPTS $DECK_HOST"
 
 LOG_LINES=10
 SHOW_BT=false
@@ -51,11 +60,11 @@ echo "=========================================="
 echo ""
 
 echo "--- Service Status ---"
-$SSH_CMD "echo <DECK_PASSWORD> | sudo -S systemctl status sc2-hogp --no-pager 2>&1 | head -10" 2>/dev/null || echo "  (not running)"
+$SSH_CMD "echo $DECK_PASSWORD | sudo -S systemctl status sc2-hogp --no-pager 2>&1 | head -10" 2>/dev/null || echo "  (not running)"
 echo ""
 
 echo "--- Last $LOG_LINES Log Lines ---"
-$SSH_CMD "echo <DECK_PASSWORD> | sudo -S journalctl -u sc2-hogp -n $LOG_LINES --no-pager 2>&1" 2>/dev/null
+$SSH_CMD "echo $DECK_PASSWORD | sudo -S journalctl -u sc2-hogp -n $LOG_LINES --no-pager 2>&1" 2>/dev/null
 echo ""
 
 echo "--- Connection State ---"
@@ -64,7 +73,7 @@ echo ""
 
 if [[ "$SHOW_BT" == "true" ]]; then
     echo "--- BT Adapter ---"
-    $SSH_CMD "echo <DECK_PASSWORD> | sudo -S btmgmt info 2>&1 | head -10" 2>/dev/null
+    $SSH_CMD "echo $DECK_PASSWORD | sudo -S btmgmt info 2>&1 | head -10" 2>/dev/null
     $SSH_CMD "bluetoothctl show 2>/dev/null | head -8" 2>/dev/null
     echo ""
 fi

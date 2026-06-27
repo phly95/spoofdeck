@@ -5,3 +5,4 @@ __pycache__/
 *.log
 /tmp/
 input_plumber/
+pii.env

@@ -404,22 +404,29 @@ Use `actor(operation="wait", actor_id=...)` to block until the previous actor fi
 
 ## Connection Details
 
-| Item | Value |
-|------|-------|
-| Deck IP | `<DECK_IP>` |
-| SSH user | `deck` |
-| SSH password | <DECK_PASSWORD> |
-| sudo password | <DECK_PASSWORD> |
-| BT adapter address | `<DECK_BT_MAC_PUBLIC>` (public) |
-| Static BLE address | `C2:12:34:56:78:9A` |
-| Host PC BT adapter | `<HOST_BT_MAC>` (Qualcomm 4.2) |
-| Host sudo password | `<HOST_SUDO_PASSWORD>` — for btmon |
+All connection details are in `pii.env` (not tracked by git). Source it before running scripts:
+
+```bash
+source pii.env
+```
+
+| Item | Env Variable |
+|------|-------------|
+| Deck IP | `$DECK_IP` |
+| SSH user | `$DECK_USER` |
+| SSH password | `$DECK_PASSWORD` |
+| sudo password | `$DECK_SUDO_PASSWORD` |
+| BT adapter address | `$DECK_BT_MAC_PUBLIC` (public) |
+| Static BLE address | `C2:12:34:56:78:9A` (fixed) |
+| Host PC BT adapter | `$HOST_BT_MAC` |
+| Host sudo password | `$HOST_SUDO_PASSWORD` |
 
 ### SSH Tips
 ```bash
-sshpass -p '<DECK_PASSWORD>' ssh -o StrictHostKeyChecking=no deck@<DECK_IP>
+source pii.env
+sshpass -p "$DECK_PASSWORD" ssh -o StrictHostKeyChecking=no "$DECK_USER@$DECK_IP"
 # sudo wrapper:
-echo '<DECK_PASSWORD>' | sudo -S "$@"
+echo "$DECK_PASSWORD" | sudo -S "$@"
 ```
 
 ---
@@ -428,23 +435,25 @@ echo '<DECK_PASSWORD>' | sudo -S "$@"
 
 ### On the Deck:
 ```bash
+source pii.env
+
 # 1. Stop old services
-echo <DECK_PASSWORD> | sudo -S systemctl stop sc2-hogp bluetooth
-echo <DECK_PASSWORD> | sudo -S systemctl reset-failed sc2-hogp
+echo $DECK_PASSWORD | sudo -S systemctl stop sc2-hogp bluetooth
+echo $DECK_PASSWORD | sudo -S systemctl reset-failed sc2-hogp
 
 # 2. Remove debug override (if exists)
-echo <DECK_PASSWORD> | sudo -S rm -rf /etc/systemd/system/bluetooth.service.d
-echo <DECK_PASSWORD> | sudo -S systemctl daemon-reload
+echo $DECK_PASSWORD | sudo -S rm -rf /etc/systemd/system/bluetooth.service.d
+echo $DECK_PASSWORD | sudo -S systemctl daemon-reload
 
 # 3. Restart bluetooth
-echo <DECK_PASSWORD> | sudo -S systemctl start bluetooth
+echo $DECK_PASSWORD | sudo -S systemctl start bluetooth
 sleep 2
 
 # 4. Apply BT config (bredr off + static addr)
-echo <DECK_PASSWORD> | sudo -S python3 /tmp/config_bt.py
+echo $DECK_PASSWORD | sudo -S python3 /tmp/config_bt.py
 
 # 5. Start the raw L2CAP ATT server
-echo <DECK_PASSWORD> | sudo -S systemd-run --remain-after-exit \
+echo $DECK_PASSWORD | sudo -S systemd-run --remain-after-exit \
   --unit=sc2-hogp \
   --property=WorkingDirectory=/tmp/sc2-spoof \
   python3 -u /tmp/sc2-spoof/src/main_l2cap.py \

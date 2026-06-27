@@ -11,7 +11,16 @@
 
 set -euo pipefail
 
-DECK_HOST="deck@<DECK_IP>"
+# Load local configuration (not tracked by git)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [ -f "$SCRIPT_DIR/../pii.env" ]; then
+    source "$SCRIPT_DIR/../pii.env"
+else
+    echo "ERROR: pii.env not found. Copy pii.env.example to pii.env and fill in your values."
+    exit 1
+fi
+
+DECK_HOST="$DECK_USER@$DECK_IP"
 SSH_OPTS="-o StrictHostKeyChecking=no"
 DECK_DIR="/tmp/sc2-spoof/src"
 LOCAL_DIR="$(cd "$(dirname "$0")/../src" && pwd)"
@@ -39,7 +48,7 @@ for f in "${FILES[@]}"; do
     src="$LOCAL_DIR/$f"
     if [[ -f "$src" ]]; then
         echo "  SCP: $f"
-        sshpass -p '<DECK_PASSWORD>' scp $SSH_OPTS "$src" "$DECK_HOST:$DECK_DIR/$f"
+        sshpass -p "$DECK_PASSWORD" scp $SSH_OPTS "$src" "$DECK_HOST:$DECK_DIR/$f"
         deployed=$((deployed + 1))
     fi
 done
@@ -53,9 +62,9 @@ echo "[+] Deployed $deployed file(s)"
 
 if [[ "$NO_RESTART" == "false" ]]; then
     echo "=== Restarting sc2-hogp ==="
-    sshpass -p '<DECK_PASSWORD>' ssh $SSH_OPTS "$DECK_HOST" \
-        "echo <DECK_PASSWORD> | sudo -S systemctl restart sc2-hogp 2>&1; \
+    sshpass -p "$DECK_PASSWORD" ssh $SSH_OPTS "$DECK_HOST" \
+        "echo $DECK_PASSWORD | sudo -S systemctl restart sc2-hogp 2>&1; \
          sleep 2; \
-         echo <DECK_PASSWORD> | sudo -S journalctl -u sc2-hogp -n 5 --no-pager 2>&1"
+         echo $DECK_PASSWORD | sudo -S journalctl -u sc2-hogp -n 5 --no-pager 2>&1"
     echo "[+] Service restarted"
 fi
