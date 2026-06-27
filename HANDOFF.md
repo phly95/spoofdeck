@@ -80,48 +80,39 @@ We present the **Steam Deck** as a **Steam Controller 2026 (SC2 / Triton)** over
 
 ## 3. What Needs to be Done
 
-### 1. Fix Zombie Disconnect (PRIMARY BLOCKER)
-- **Status**: The identity slot at `controller+slot*0xe8+0x200` must be populated before the zombie timer fires (~10s). Feature report WRITE commands arrive ~150s after connection — too late. Controller becomes zombie within 10 seconds of opening. 44 registration attempts, 412 zombie disconnections since Jun 24.
-- **CONFIRMED PRE-EXISTING (2026-06-26)**: Tested old commit `1b6bfde` (yesterday 6:51 PM) — same zombie disconnect. Both root issues existed before our changes.
-- **Root cause chain**:
-  1. BLE connection → GATT discovery → reads FR 0x00 → returns zeros (no pending response)
-  2. BlueZ creates UHID device → Steam opens controller → starts feature report processing
-  3. Feature report WRITE commands arrive ~150s after connection (too late)
-  4. Zombie timer fires at ~10s → identity slot empty → DISCONNECT
-  5. Identity slot populated by feature report processing code at 0x10d4e6c
-  6. Feature report processing requires UHID device + Steam's HID API calls
-  7. Race condition: zombie timer fires before feature report processing completes
-- **Steam controller log shows**:
+### 1. ~~Fix Zombie Disconnect~~ RESOLVED (2026-06-26)
+- **Status**: Registration is now **stable**. `BYieldingCompleteSteamControllerRegistration` completes. No zombie disconnects. Input flows on handle 0x0012.
+- **Root cause was stale BlueZ state** — cached bonding keys, CCCD states, and HOG profile state from previous sessions blocked SET_REPORT. Host PC reboot cleared it.
+- **Fix for future breakage**:
   ```
-  CGetControllerInfoWorkItem::RunFunc: Read failure. (×10)
-  Warning, couldn't get controller details for SC, PID=4867
-  GetControllerInfo failed - executed 1, success 0
-  Controller uses V1 HID protocol via BLE
-  !! Steam controller device opened for index 0
-  Steam Controller reserving XInput slot 0
-  Controller PollState Changed from 0 to 1
-  Disconnecting zombie controller 0  (6-13 seconds later)
+  sudo rm -rf /var/lib/bluetooth/<HOST_BT_MAC>/C2:12:34:56:78:9A
+  sudo rm -rf /var/lib/bluetooth/cache
+  sudo systemctl restart bluetooth
   ```
-- **RE findings**:
-  - `0x1070620` is a 7-check gate function (zombie check + registration identity)
-  - Checks: bounds, vtable, connection exists, connection state (1 or 4), **slot ready flag at slot+0x200**
-  - Identity slot populated by `QueueFetchingControllerDetails` at 0x1092820
-  - Serial validation at 0x26b1ac0 (V_strncmp) checks first byte == 'F' (0x46)
-  - `CGetControllerInfoWorkItem` failure does NOT block registration (separate code path)
-- **What to try next**:
-  1. Find a way to populate the identity slot without waiting for Steam's feature report writes
-  2. Investigate why feature report WRITE commands are delayed ~150s
-  3. Consider bypassing the zombie check (e.g., manipulating connection state)
+  Then restart Deck's sc2-hogp service. `rmmod btusb` does NOT fix this — stale state is in BlueZ user-space.
 
-### 2. Fix Encryption Error (SECONDARY BLOCKER)
-- **Status**: `set_report_cb() Error: Encryption Key Size is insufficient` blocks SET_REPORT. This is a BlueZ HOG profile internal issue — not caused by our code. Confirmed PRE-EXISTING (tested old commit `1b6bfde`).
-- **BREAKTHROUGH (2026-06-26 evening)**: After host PC reboot, input IS flowing. The stale BlueZ state from previous sessions was blocking SET_REPORT. A reboot cleared it. This explains why the issues appeared pre-existing — the cached state persisted across code deploys.
-- **Root cause**: Stale bonding keys, LTK, or HOG profile state from previous BLE sessions was cached by BlueZ. When a new connection was established, BlueZ tried to use the old state, causing SET_REPORT to fail with "Encryption Key Size is insufficient".
-- **Fix**: Reboot the host PC to clear BlueZ cache. Or: `bluetoothctl remove C2:12:34:56:78:9A` + restart bluetooth service.
-- **What we tried**:
-  - Removed `BT_SECURITY_MEDIUM` from att_server.py — error persists
-  - Tested old version — same error (because stale state was still cached)
-  - Rebooted host PC — error cleared, input works
+### 2. ~~Fix Encryption Error~~ RESOLVED (2026-06-26)
+- **Status**: Cleared after host PC reboot. Same root cause as zombie disconnect — stale BlueZ state.
+
+### 3. ATT Server Spec Compliance (MEDIUM PRIORITY)
+- **Status**: Registration works without these fixes. These are correctness improvements that could prevent issues with different host stacks or future BlueZ versions.
+- **Items (implement one at a time, test each)**:
+  1. **Read Blob error code** (`att_server.py:379`) — Returns `ATT_ERR_INVALID_HANDLE` (0x01) when offset >= value length. Should be `ATT_ERR_INVALID_OFFSET` (0x07).
+  2. **MTU cap on Read/Notify PDUs** — Full values sent without truncating to MTU. Works in practice (MTU exchange happens first) but violates spec.
+  3. **PDU length validation** — No length checks before `struct.unpack` in `_handle_pdu`. Could crash on malformed PDUs.
+  4. **ATT permission checking** — No `ATT_PROP_READ`/`ATT_PROP_WRITE` flag checking on Read/Write Request handlers. **DO NOT check permissions on Write Command** — Feature Report 0x00 has `ATT_PROP_WRITE` but not `ATT_PROP_WRITE_NO_RSP`.
+  5. **Diagnostic handle labels** (`att_server.py:504-510, 525-531`) — Stale hardcoded handles for Mouse, Keyboard, SC2 Custom CH1/CH2. Only Gamepad (0x0012) is correct.
+
+### 4. SC2 Custom Reports (0x003c) — CCCD Not Always Enabled (HIGH PRIORITY)
+- **Status**: CCCD on handle 0x003c not always written by BlueZ hog-ll after reconnect. Host sees generic gamepad instead of full SC2. This blocks trackpads, gyro, haptics, back buttons.
+- **What to try**:
+  1. Investigate why hog-ll sometimes skips 0x003c CCCD write
+  2. Check if dual notification targets (Valve Custom Service + HID Service CHR_REPORT) cause confusion
+  3. Compare btmon captures between successful and failed CCCD enables
+
+### 5. Command Routing (MEDIUM PRIORITY)
+- **Status**: 0x85/0x8D swapped. Per protocol doc, 0x85 = SET_DEFAULT_DIGITAL_MAPPINGS, 0x8D = SET_CONTROLLER_MODE. Code has them reversed.
+- **Fix**: Swap the routing in `main_l2cap.py:556-564`.
 
 ### 3. GET_SERIAL Format (FIXED)
 - **Status**: FIXED in current commit. byte[1] changed from 0x14 to 0x15 (matches write command). Serial must start with 'F' (0x46) to pass V_strncmp validation at 0x26b1ac0.
@@ -134,19 +125,19 @@ We present the **Steam Deck** as a **Steam Controller 2026 (SC2 / Triton)** over
   bytes[3-22] = serial number (20 bytes, starts with 'F')
   ```
 
-### 4. Haptic Feedback (HOST NOT SENDING)
+### 6. Haptic Feedback (HOST NOT SENDING)
 - **Status**: The haptic forwarding code is ready and correct — `_on_haptic_write()` on handle 0x0019 parses both 10-byte and 9-byte payloads. However, **the host never sends haptic output reports** — btmon capture confirmed zero ATT Write Command (0x52) packets during a test session. The issue is upstream in Steam/hog-ll.
 - **RE findings**: Haptics use `SDL_hid_write()` (output reports, NOT feature reports). Lizard mode must be OFF for haptics to work.
 - **Note**: The SET_SETTINGS 0x09 retry loop is confirmed to be noise (not a blocker). It does not affect haptics.
 - **What to try next**:
-  1. Fix the controller registration first — haptics won't work until the controller is stable
+  1. Fix SC2 custom report CCCDs first — haptics won't work until controller registers as SC2 (not generic gamepad)
   2. Get a real SC2 btmon capture to see if haptics work on a real device
 
-### 4. Dual Trackpads & IMU (Gyro/Accel) Forwarding
+### 7. Dual Trackpads & IMU (Gyro/Accel) Forwarding
 - **Status**: 45-byte SC2 Custom report with trackpad X/Y, IMU (accel/gyro), and force sensors is **already implemented** in `input_handler.py`. The data flows correctly from Neptune HID → SC2 report.
-- **Remaining**: Steam may need specific settings enabled to activate gyro/trackpad features (registers 0x27 IMU_MODE, etc.).
+- **Remaining**: Steam may need specific settings enabled to activate gyro/trackpad features (registers 0x27 IMU_MODE, etc.). CCCDs on 0x003c must be enabled first.
 
-### 6. Auto-Reconnect Daemon
+### 8. Auto-Reconnect Daemon
 - **Status**: Advertising refresh on disconnect is **already implemented** in `main_l2cap.py:_schedule_adv_refresh()`.
 - **Remaining**: Ensure clean re-advertising after disconnects without manual intervention.
 - **Key commands in the SC2 protocol flow**:

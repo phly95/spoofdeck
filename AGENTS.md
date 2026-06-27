@@ -25,9 +25,9 @@ Make a **Steam Deck** present itself as a **Steam Controller 2026 (SC2)** over *
 │  └─────────────────────────────────────────────────────┘ │
 │                                                          │
 │  ┌─────────────────────┐  ┌──────────────────────────┐  │
-│  │  gatt_db.py          │  │  att_server.py            │  │
-│  │  (34 attributes,     │  │  (Raw L2CAP socket        │  │
-│  │   5 services)        │  │   on CID 4)               │  │
+  │  │  gatt_db.py               │  │  att_server.py            │  │
+  │  │  (85 attributes,           │  │  (Raw L2CAP socket        │  │
+  │  │   6 services)              │  │   on CID 4)               │  │
 │  └─────────────────────┘  └──────────────────────────┘  │
 │                                                          │
 │  BlueZ handles:                                          │
@@ -67,8 +67,6 @@ Make a **Steam Deck** present itself as a **Steam Controller 2026 (SC2)** over *
 
 ### Current Status
 
-**⚠️ NOTE: The current version does NOT have working input.** The controller connects, Steam detects it, but registration fails because the identity slot at `controller+slot*0xe8+0x200` is never populated before the zombie timer fires. Both root issues are PRE-EXISTING (confirmed by testing old commit `1b6bfde`).
-
 **✅ Working (End-to-End):**
 - Raw L2CAP ATT server accepts connections on CID 4.
 - MTU exchange succeeds (negotiated 517).
@@ -90,21 +88,24 @@ Make a **Steam Deck** present itself as a **Steam Controller 2026 (SC2)** over *
 - **CHR_REPORT SC2 Custom in HID Service** — Report IDs 0x45 (45-byte) and 0x47 (47-byte) in HID Service for hog-ll subscription. Dual notification targets: Valve Custom Service + HID Service CHR_REPORT.
 - **Haptic forwarding code ready** — `_on_haptic_write()` handler on handle 0x0019 correctly parses both 10-byte (with Report ID) and 9-byte (stripped) haptic payloads and forwards to Neptune. However, **the host never sends haptic output reports** — btmon capture confirmed zero ATT Write Command (0x52) packets. The issue is upstream in Steam/hog-ll.
 
-**❌ Not Working (Both PRE-EXISTING):**
-- **Zombie disconnect** — Identity slot at `controller+slot*0xe8+0x200` never populated before zombie timer fires (~10s). Feature report WRITE commands arrive ~150s after connection. Controller becomes zombie within 10 seconds of opening. 44 registration attempts, 412 zombie disconnections since Jun 24.
-- **Encryption error** — `set_report_cb() Error: Encryption Key Size is insufficient` persists even without BT_SECURITY_MEDIUM. BlueZ HOG profile internal issue — SET_REPORT fails, blocking feature report handshake. Confirmed pre-existing (tested old commit `1b6bfde`).
-- **Input not reaching Steam** — controller registers briefly then dies. No stable input.
+**~~❌ Not Working (Both PRE-EXISTING)~~ — RESOLVED (2026-06-26):**
+- **~~Zombie disconnect~~** — Caused by stale BlueZ state, not code. After host PC reboot or clearing bond data + restarting BlueZ daemon, registration completes and input flows.
+- **~~Encryption error~~** — Same root cause. Cleared after host reboot.
+- **~~Input not reaching Steam~~** — Resolved after clearing stale BlueZ state.
 
 **NOTE (2026-06-26 evening)**: After host PC reboot, input IS flowing. The stale BlueZ state from previous sessions was blocking SET_REPORT. A reboot cleared it. This explains why the issues appeared pre-existing — the cached state persisted across code deploys.
 
 ### What Needs to Happen Next
 
-1. **Fix Zombie Disconnect (PRIMARY BLOCKER)** — The identity slot at `controller+slot*0xe8+0x200` must be populated before the zombie timer fires (~10s). Feature report WRITE commands arrive ~150s after connection — too late. Need to either:
-   - Find a way to populate the identity slot without Steam's feature report writes
-   - Make the zombie timer fire later
-   - Find an alternative code path to populate the identity slot
-2. **Fix Encryption Error** — `set_report_cb() Error: Encryption Key Size is insufficient` blocks SET_REPORT. This is a BlueZ HOG profile internal issue. May require BlueZ source modification or a workaround (e.g., different security level, or bypassing BlueZ's HOG entirely).
-3. **GET_SERIAL Format** — FIXED: byte[1] changed from 0x14 to 0x15 (matches write command). Serial must start with 'F' (0x46) to pass V_strncmp validation at 0x26b1ac0.
+1. **Get SC2 Custom Reports Working (PRIMARY)** — CCCD on handle 0x003c not always enabled by BlueZ hog-ll after reconnect. Host sees generic gamepad instead of full SC2. Investigate why hog-ll sometimes skips 0x003c CCCD write. This blocks trackpads, gyro, haptics, back buttons.
+2. **Fix Command Routing** — 0x85 vs 0x8D swapped (SET_DEFAULT_DIGITAL_MAPPINGS vs SET_CONTROLLER_MODE). Simple swap in `main_l2cap.py:556-564`.
+3. **ATT Server Spec Compliance** — Implement one at a time, test each:
+   - Read Blob error code (0x01 → 0x07)
+   - MTU caps on Read/Notify PDUs
+   - PDU length validation
+   - ATT permission checking (Read + Write Request only, NOT Write Command)
+   - Fix diagnostic handle labels
+4. **GET_SERIAL Format** — FIXED: byte[1] changed from 0x14 to 0x15 (matches write command). Serial must start with 'F' (0x46) to pass V_strncmp validation at 0x26b1ac0.
 
 ### Files You Must Read Before Making Changes
 
@@ -569,7 +570,7 @@ Sticks, triggers, trackpads, IMU — see `docs/sc2-protocol.md` for full format.
 ├── src/
 │   ├── main_l2cap.py            # ★ ENTRYPOINT — raw L2CAP ATT server
 │   ├── att_server.py            # ★ Raw L2CAP ATT server
-│   ├── gatt_db.py               # ★ GATT database (34 attributes)
+│   ├── gatt_db.py               # ★ GATT database (85 attributes, 6 services)
 │   ├── agent.py                 # BlueZ Agent1 (auto-confirm)
 │   ├── adv.py                   # BLE advertisement
 │   ├── bluez.py                 # BlueZ D-Bus helpers
