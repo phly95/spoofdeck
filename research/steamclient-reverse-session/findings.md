@@ -1171,8 +1171,53 @@ Feature report WRITE commands (SET_REPORT) arrive ~150 seconds after connection.
 
 ---
 
-*Analysis date: 2026-06-25 (updated 2026-06-26, sessions 1-6)*
+*Analysis date: 2026-06-25 (updated 2026-06-28, sessions 1-7)*
 *Binary analyzed: `~/.steam/debian-installation/linux64/steamclient.so` (46,488,096 bytes)*
 *SDL3 source: `src/joystick/hidapi/SDL_hidapi_steam_triton.c` (GitHub)*
 *BlueZ binary: `/usr/libexec/bluetooth/bluetoothd`*
 *Tools used: radare2, objdump, Python scripts, SDL3 source code*
+
+---
+
+## SESSION 7 (2026-06-28) — Haptics Root Cause Analysis
+
+### Finding: `0x17252a0` is DEAD CODE
+
+The haptic trigger function at `0x17252a0` has **ZERO callers** in the entire 46MB binary. Searched via:
+- E8 call-rel32 scan (Python)
+- 64-bit pointer search
+- 32-bit value search
+- LEA [rip+disp32] search
+- Relocation search (.rela.dyn + .rela.plt)
+- GOT/.got.plt search
+- .data.rel.ro vtable search
+- MOV imm64 search
+- Jump table dispatch search
+- objdump disassembly grep
+- radare2 `axt`
+
+All returned zero matches. The function exists but is never invoked. Checks inside it (+0x320, +0x308) are downstream and irrelevant to the current blocking.
+
+### Finding: SDL.joystick.cap.rumble is NOT the Blocker
+
+The string `SDL.joystick.cap.rumble` at `0x00d0d093` IS referenced in code at `0x0176a25d`. The code queries it via `[0x02c6a868]` (likely `SDL_GetHintBoolean`) and gates bit 14 (0x4000) in the capability bitmask. However, Steam IS scheduling haptics (`CPulseHapticWorkItem` appears in Steam logs), so this capability check is NOT the blocker.
+
+### Finding: Primary Blocker is hog-ll SET_REPORT Failure
+
+BlueZ hog-ll tries SET_REPORT ~100 times/second and fails (487 errors in btmon). Without SET_REPORT success, the output report path is never established and haptic writes from Steam are rejected at kernel level. Steam schedules `CPulseHapticWorkItem` but the write completes in 0.0ms (rejected).
+
+### Finding: SET_SETTINGS 0x09 Notification Not Delivered
+
+Real SC2 sends notification `[0x87, 0x01, register, 0x00 × 61]` on handle 0x0033 after each SET_SETTINGS write. Our code intentionally skips this (to avoid phantom button presses). Steam retries every ~3 seconds, never completing the state machine.
+
+### Finding: GATT/HID Metadata is Correct
+
+Report Map declares output report 0x80, CHR_REPORT exists at handle 0x0019 with correct properties, Report Reference is `[0x80, 0x02]`, write callback is registered. All checks pass. The issue is upstream in BlueZ/Steam, not in our GATT database.
+
+### Files Generated
+
+| File | Content |
+|------|---------|
+| `functions/haptic_dead_code_analysis.c` | **NEW** Analysis of 0x17252a0 and its lack of callers |
+| `functions/sdl_rumble_capability.c` | **NEW** SDL.joystick.cap.rumble analysis |
+| `functions/set_report_failure.c` | **NEW** hog-ll SET_REPORT failure analysis |

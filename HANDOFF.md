@@ -100,22 +100,25 @@ We present the **Steam Deck** as a **Steam Controller 2026 (SC2 / Triton)** over
 
 ### 3. Haptics (PRIMARY REMAINING ISSUE)
 - **Status**: Host never sends haptic output reports (btmon confirmed zero ATT Write Command 0x52 packets). The haptic forwarding code is ready — `_on_haptic_write()` on handle 0x0019 correctly parses both 10-byte and 9-byte payloads and forwards to Neptune.
+- **Root cause identified**: BlueZ hog-ll SET_REPORT initialization fails (487 errors in btmon), preventing output report path from being established. Steam DOES schedule `CPulseHapticWorkItem` but the write is rejected at kernel level. Contributing factor: SET_SETTINGS 0x09 notification not delivered — real SC2 sends notification on handle 0x0033, our code intentionally skips it.
 - **What's known**:
   - Haptics use `SDL_hid_write()` (output reports, NOT feature reports). Report ID 0x80, 10 bytes.
   - Lizard mode must be OFF for haptics to work.
   - `btusb` kernel module reset does NOT fix this — stale state is in BlueZ user-space.
+  - Steam IS scheduling haptics (`CPulseHapticWorkItem` appears in Steam logs) but writes fail instantly (0.0ms).
+  - `0x17252a0` (haptic trigger function) is DEAD CODE — zero callers in steamclient.so.
+  - `SDL.joystick.cap.rumble` is NOT the blocker — Steam schedules haptics despite this.
 - **Haptic transport**: `SDL_hid_write()` → IPC → BlueZ hog-ll → ATT Write Command (0x52).
 - **Haptic format** (10 bytes): `[0x80, type(1), intensity(2 LE), left_speed(2 LE), left_gain(1), right_speed(2 LE), right_gain(1)]`
 - **Trigger chain**: SDL3's `HIDAPI_DriverSteamTriton_UpdateDevice()` polls every 6ms. If `low_frequency_rumble || high_frequency_rumble` is non-zero and 40ms has passed, it calls `SDL_hid_write()`. Rumble is resent every 40ms while non-zero.
-- **Root cause**: The game isn't calling `SDL_RumbleJoystick()` with non-zero values. SDL3 never reaches the `SDL_hid_write()` call. This is likely a registration/state issue — Steam doesn't think it needs to send haptics.
-- **SET_SETTINGS 0x09 loop**: If Steam thinks lizard mode is ON, haptics are blocked. The loop retries every 3 seconds but never gets a proper response.
+- **SET_SETTINGS 0x09 loop**: Steam retries every 3 seconds, never getting the notification response a real SC2 sends on 0x0033. This may keep Steam in a partially-initialized controller state.
 - **6 haptic report types**: 0x80 (rumble), 0x81 (pulse), 0x82 (command), 0x83 (LFO tone), 0x84 (log sweep), 0x85 (script). Only 0x80 is used by games via `SDL_RumbleJoystick()`.
 - **SC2 → Neptune translation**: Simple — `left_speed → left_intensity`, `right_speed → right_intensity`, period=0. Translation code already in `main_l2cap.py:281-289`. Neptune has dual ERM motors (basic rumble) vs SC2's dual LRA (precision haptics) — fidelity loss but functional for game rumble.
-- **`set_report_cb()` error**: BlueZ tries writing output reports before encryption is established (error 0x0C). Transient, not blocking.
-- **What to try**:
-  1. Investigate why Steam's haptic code path isn't triggered — may require specific controller state or register values
-  2. Get a real SC2 btmon capture to see if haptics work on a real device
-  3. Check if SET_SETTINGS 0x09 retry is a prerequisite for haptics
+- **`set_report_cb()` error**: BlueZ hog-ll tries SET_REPORT ~100 times/second and fails (487 errors in btmon). Without SET_REPORT success, the output report path is never established and haptic writes from Steam are rejected at kernel level.
+- **What to try next**:
+  1. Fix SET_SETTINGS notification delivery — send echo response on CHR_REPORT handle 0x0033 after each SET_SETTINGS write
+  2. Diagnose why hog-ll SET_REPORT fails — add logging to `_handle_write_cmd()` for all incoming Write Command (0x52) packets
+  3. Get a real SC2 btmon capture to see if haptics work on a real device
 
 ### 4. ATT Server Spec Compliance (LOW PRIORITY)
 - **Status**: Registration works without these fixes. These are correctness improvements that could prevent issues with different host stacks or future BlueZ versions.

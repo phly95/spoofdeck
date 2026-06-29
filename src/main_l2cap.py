@@ -358,15 +358,27 @@ class HoGPeripheral:
         # Other Feature Reports — proxy to Neptune
         self._proxy_feature_write(report_id, value)
 
-    def _handle_mode_switch(self, value):
+    def _handle_mode_switch(self, value, from_command=False):
         """Handle mode switch between Lizard and Steam Input.
 
         Called from Feature Report 0x85 write and SC2 command 0x8D (SET_CONTROLLER_MODE).
+
+        Args:
+            value: Raw ATT write data (includes Report ID prefix from hog-ll)
+            from_command: True if called from SC2 command 0x8D (format: [ReportID, cmd, len, mode, ...])
+                         False if called from FR 0x85 write (format: [0x85, mode, ...])
         """
         if len(value) > 0:
-            mode = value[0]
-            if len(value) >= 2 and value[0] == 0x85:
-                mode = value[1]
+            if from_command:
+                # SC2 command 0x8D format: [ReportID, 0x8D, length, mode, ...]
+                # Mode byte is at index 3
+                mode = value[3] if len(value) > 3 else 0x00
+            elif value[0] == 0x85:
+                # FR 0x85 write format: [0x85, mode, ...]
+                # Mode byte is at index 1
+                mode = value[1] if len(value) > 1 else 0x00
+            else:
+                mode = value[0]
             if mode == 0x01:
                 self.steam_input_mode = True
                 print("[DIAG] ⭐ MODE SWITCH: Lizard → Steam Input Mode")
@@ -557,17 +569,17 @@ class HoGPeripheral:
             print(f"[DIAG] 🎮 → 0xf2 response: {response[:20].hex()}...")
 
         elif cmd == self.SC2_CMD_SET_DEFAULT_MAPPINGS:
-            # SET_DEFAULT_DIGITAL_MAPPINGS (0x85) — Acknowledge, enter gamepad mode
+            # SET_DEFAULT_DIGITAL_MAPPINGS (0x85) — Acknowledge only, no mode switch
             response = bytearray([
                 0x85,       # header.type = SetDefaultDigitalMappings
                 0x00,       # header.length = 0
             ])
             response += bytearray(64 - len(response))
-            print(f"[DIAG] 🎮 → Acknowledging SET_DEFAULT_MAPPINGS")
+            print(f"[DIAG] 🎮 → Acknowledging SET_DEFAULT_DIGITAL_MAPPINGS")
 
         elif cmd == self.SC2_CMD_SET_CONTROLLER_MODE:
             # SET_CONTROLLER_MODE (0x8D) — Handle mode switch, echo back
-            self._handle_mode_switch(value)
+            self._handle_mode_switch(value, from_command=True)
             response = bytearray([
                 0x8D,       # header.type = SetControllerMode
                 0x00,       # header.length = 0

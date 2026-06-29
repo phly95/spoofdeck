@@ -57,9 +57,10 @@ HIDAPI_DriverSteamTriton_UpdateDevice() [every 6ms]:
 ```
 
 ### Why Haptics Don't Work
-1. **Game never calls `SDL_RumbleJoystick()`** — SDL3 never reaches `SDL_hid_write()`. Root cause: registration/state issue.
-2. **SET_SETTINGS 0x09 loop** — If Steam thinks lizard mode is ON, haptics are blocked.
-3. **`set_report_cb()` error 0x0C** — BlueZ tries writing output reports before encryption is established. Transient.
+1. **hog-ll SET_REPORT initialization fails** — BlueZ tries SET_REPORT ~100 times/second (487 errors in btmon). Without SET_REPORT success, the output report path is never established and haptic writes from Steam are rejected at kernel level. Steam schedules `CPulseHapticWorkItem` but the write completes in 0.0ms (rejected).
+2. **SET_SETTINGS 0x09 notification not delivered** — Real SC2 sends notification `[0x87, 0x01, register, 0x00 × 61]` on handle 0x0033 after each SET_SETTINGS write. Our code intentionally skips this (to avoid phantom button presses). Steam retries every ~3 seconds, never completing the state machine.
+3. **`0x17252a0` is dead code** — The haptic trigger function at 0x17252a0 has ZERO callers in steamclient.so. The checks inside it (+0x320, +0x308) are downstream and irrelevant to the current blocking.
+4. **`SDL.joystick.cap.rumble` is NOT the blocker** — Steam schedules haptics despite this hint. The capability gates bit 14 (0x4000) in the capability bitmask, but Steam is already trying to send haptics.
 
 ### Neptune vs SC2 Haptic Format
 - **SC2**: Dual LRA motors, 6 output report types (0x80-0x85)
@@ -67,14 +68,17 @@ HIDAPI_DriverSteamTriton_UpdateDevice() [every 6ms]:
 - Translation is straightforward but host never sends haptics.
 
 ### Binary Addresses
-| Function | VA | String Reference |
-|----------|-----|------------------|
-| TriggerHapticPulse | 0x013205a3 | 0x00ab43f0 |
-| ForceSimpleHapticEvent | 0x01322dae | 0x00ab43b0 |
-| CRumbleThread | 0x0111b370 | 0x00aa5b00 |
-| CPulseHapticWorkItem | RTTI at 0x00aa28e2 | — |
-| SDL_hid_write | dlsym at 0x01760ff5 | — |
-| SDL_hid_send_feature_report | dlsym at 0x01760fa2 | — |
+| Function | VA | String Reference | Status |
+|----------|-----|------------------|--------|
+| TriggerHapticPulse | 0x013205a3 | 0x00ab43f0 | IClientTimeline dispatcher, NOT haptic |
+| ForceSimpleHapticEvent | 0x01322dae | 0x00ab43b0 | IClientVideo dispatcher, NOT haptic |
+| CRumbleThread | 0x0111b370 | 0x00aa5b00 | Jump table dispatcher |
+| CPulseHapticWorkItem | RTTI at 0x00aa28e2 | — | Confirmed in Steam logs |
+| SDL_hid_write | dlsym at 0x01760ff5 | — | Resolved at runtime |
+| SDL_hid_send_feature_report | dlsym at 0x01760fa2 | — | Resolved at runtime |
+| Haptic trigger (0x17252a0) | 0x017252a0 | — | **DEAD CODE** — zero callers |
+| SDL.joystick.cap.rumble | 0x00d0d093 | — | Gates bit 14 (0x4000) in capability bitmask |
+| set_report_cb error | 0x00115f13 | "hog-lib.c" | BlueZ SET_REPORT failure |
 
 ### What's Been Tried
 - Testing haptics with Steam UI (trackpad clicks, start button holds) — no haptics triggered
@@ -87,6 +91,8 @@ HIDAPI_DriverSteamTriton_UpdateDevice() [every 6ms]:
 - Real SC2 btmon capture — would answer all remaining questions in minutes
 - Writing directly to `/dev/hidrawN` on host — would test if forwarding path works
 - Investigating specific controller state/register values needed for haptics
+- **Fix SET_SETTINGS notification delivery** — send echo response on CHR_REPORT handle 0x0033 after each SET_SETTINGS write. This matches what a real SC2 does and may unblock Steam's state machine.
+- **Diagnose why hog-ll SET_REPORT fails** — add logging to `_handle_write_cmd()` for all incoming Write Command (0x52) packets.
 
 ### SC2 → Neptune Haptic Translation
 

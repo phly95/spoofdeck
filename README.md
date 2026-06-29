@@ -6,7 +6,7 @@ Make a Steam Deck present itself as a Steam Controller 2026 over Bluetooth Low E
 
 **Working**: Gamepad, trackpads, gyro, back buttons, standard HID input. Steam Client recognizes the Deck as an SC2 controller with full Steam Input features.
 
-**Not working**: Haptics. The haptic forwarding code is ready but Steam never sends haptic output reports. See `docs/findings-backlog.md` for details.
+**Not working**: Haptics. Root cause identified: BlueZ hog-ll SET_REPORT initialization fails (487 errors in btmon), preventing output report path from being established. Steam schedules haptic work items but writes are rejected at kernel level. See `docs/findings-backlog.md` for details.
 
 **Stable**: Registration completes reliably. No zombie disconnects after clearing stale BlueZ state.
 

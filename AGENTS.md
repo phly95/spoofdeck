@@ -92,7 +92,7 @@ Make a **Steam Deck** present itself as a **Steam Controller 2026 (SC2)** over *
 - **Haptic forwarding code ready** — `_on_haptic_write()` handler on handle 0x0019 correctly parses both 10-byte (with Report ID) and 9-byte (stripped) haptic payloads and forwards to Neptune. However, **the host never sends haptic output reports** — btmon capture confirmed zero ATT Write Command (0x52) packets. The issue is upstream in Steam/hog-ll.
 
 **❌ Not Working:**
-- **Haptics** — Host never sends haptic output reports (btmon confirmed zero 0x52 packets). Blocked by stable SC2 registration path — Steam's haptic code path may require specific controller state that isn't reached yet.
+- **Haptics** — Host never sends haptic output reports (btmon confirmed zero 0x52 packets). Root cause identified: BlueZ hog-ll SET_REPORT initialization fails (487 errors in btmon), preventing output report path from being established. Steam DOES schedule `CPulseHapticWorkItem` but the write is rejected at kernel level. Contributing factor: SET_SETTINGS 0x09 notification not delivered (real SC2 sends notification on handle 0x0033, our code intentionally skips it). See `docs/findings-backlog.md` Haptics Deep Dive for details.
 
 **~~❌ Not Working (Both PRE-EXISTING)~~ — RESOLVED (2026-06-26):**
 - **~~Zombie disconnect~~** — Caused by stale BlueZ state, not code. After host PC reboot or clearing bond data + restarting BlueZ daemon, registration completes and input flows.
@@ -103,8 +103,8 @@ Make a **Steam Deck** present itself as a **Steam Controller 2026 (SC2)** over *
 
 ### What Needs to Happen Next
 
-1. **Get SC2 Custom Reports Working (PRIMARY)** — CCCD on handle 0x003c not always enabled by BlueZ hog-ll after reconnect. Host sees generic gamepad instead of full SC2. Investigate why hog-ll sometimes skips 0x003c CCCD write. This blocks trackpads, gyro, haptics, back buttons.
-2. **Fix Command Routing** — 0x85 vs 0x8D swapped (SET_DEFAULT_DIGITAL_MAPPINGS vs SET_CONTROLLER_MODE). Simple swap in `main_l2cap.py:556-564`.
+1. **Fix SET_SETTINGS notification delivery** — After processing SET_SETTINGS, send the echo response as a 64-byte ATT notification on CHR_REPORT handle 0x0033. Real SC2 sends `[0x87, 0x01, register, 0x00 × 61]` after each SET_SETTINGS write. Our code intentionally skips this (to avoid phantom button presses), but it may be required for Steam's state machine to complete.
+2. **Diagnose why hog-ll SET_REPORT fails** — BlueZ hog-ll tries SET_REPORT ~100 times/second and fails (487 errors in btmon). Without SET_REPORT success, the output report path is never established and haptic writes are rejected at kernel level. Add diagnostic logging to `_handle_write_cmd()` to capture all incoming Write Command (0x52) packets.
 3. **ATT Server Spec Compliance** — Implement one at a time, test each:
    - Read Blob error code (0x01 → 0x07)
    - MTU caps on Read/Notify PDUs
@@ -544,6 +544,7 @@ Sticks, triggers, trackpads, IMU — see `docs/sc2-protocol.md` for full format.
    - **IMPORTANT**: `btusb` kernel module reset (`sudo rmmod btusb && sudo modprobe btusb`) does NOT fix this — the stale state is in BlueZ user-space, not the kernel driver.
 10. **hog-ll strips Report ID from output reports** — When the host writes an output report (e.g., haptic 0x80) to `/dev/hidrawN`, hog-ll strips the Report ID byte before sending the ATT Write Command (0x52). The `_on_haptic_write()` handler must parse the 9-byte payload without the 0x80 prefix (type at [0], left speed at [3], right speed at [6]).
 11. **Cumulative BlueZ state corruption** — Repeated connection failures (e.g., from code bugs sending bad ATT responses) can poison BlueZ's HOG driver state. The driver may stop re-enabling CCCDs on subsequent connections, even after `bluetoothctl remove`. The only fix is clearing bond data + restarting the daemon, or a full reboot. This is why testing with a broken code version can break ALL subsequent tests until the state is cleared.
+12. **Haptics blocked by hog-ll SET_REPORT failure** — BlueZ hog-ll tries SET_REPORT ~100 times/second to configure output reports and fails (487 errors in btmon). Without SET_REPORT success, the output report path is never established and haptic writes from Steam are rejected at kernel level. Steam schedules `CPulseHapticWorkItem` but the write completes in 0.0ms (rejected). Contributing factor: SET_SETTINGS 0x09 notification not delivered — real SC2 sends notification on handle 0x0033, our code intentionally skips it. See `docs/findings-backlog.md` for details.
 
 ---
 
