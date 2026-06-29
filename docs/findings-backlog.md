@@ -18,7 +18,7 @@ No zombie disconnects, no errors. `BYieldingCompleteSteamControllerRegistration`
 ### Transport
 - Haptics use `SDL_hid_write()` (output reports), NOT `SDL_hid_send_feature_report()`.
 - Report ID 0x80, 10 bytes total.
-- Path: steamclient.so → protobuf IPC → bluetoothd → ATT Write Command (0x52) → BLE
+- Path: `SDL_hid_write()` -> kernel hidraw -> `uhid_hid_output_raw()` -> `UHID_OUTPUT` -> BlueZ `forward_report()` -> `find_report_by_rtype()` -> `gatt_write_char()` [ATT 0x12] -> our ATT server
 
 ### SC2 Haptic Format (Report ID 0x80)
 ```
@@ -57,10 +57,14 @@ HIDAPI_DriverSteamTriton_UpdateDevice() [every 6ms]:
 ```
 
 ### Why Haptics Don't Work
-1. **hog-ll never attempts SET_REPORT on clean connection** — On a clean connection (stale state cleared), BlueZ hog-ll never tries to configure output reports via SET_REPORT. Without SET_REPORT, the output report path is never established and haptic writes from Steam are rejected at kernel level. Steam schedules `CPulseHapticWorkItem` but the write completes in 0.0ms (rejected). Earlier "487 errors" and "unlikely error" (0x0E) messages were from stale connection attempts before bond data was cleared. **Confirmed** — fresh btmon capture (2026-06-28) shows zero Write Commands (0x52).
-2. **~~SET_SETTINGS 0x09 notification not delivered~~** — **TESTED AND FAILED (2026-06-28)**. We tried sending 45-byte ack notifications on handle 0x0033 with zeroed button bytes. This caused ghost inputs (phantom button presses). The notification was reverted. The missing SET_SETTINGS notification is NOT the haptics blocker. **Confidence: Disproven** — direct test with counter-evidence.
-3. **`0x17252a0` is dead code** — The haptic trigger function at 0x17252a0 has ZERO callers in steamclient.so. The checks inside it (+0x320, +0x308) are downstream and irrelevant to the current blocking. **Confidence: Confirmed** — multiple analysis methods agree.
-4. **`SDL.joystick.cap.rumble` is NOT the blocker** — Steam schedules haptics despite this hint. The capability gates bit 14 (0x4000) in the capability bitmask, but Steam is already trying to send haptics. **Confidence: Confirmed** — Steam logs show CPulseHapticWorkItem creation.
+1. **hog-ll `forward_report()` path is the haptics mechanism** — BlueZ hog-lib.c source analysis (2026-06-29) shows haptics flow through `UHID_OUTPUT` -> `forward_report()`, NOT `UHID_SET_REPORT` -> `set_report()`. `set_report()` is kernel-initiated (device probe), not triggered by Steam writes. **Confirmed** — BlueZ 5.86 source at `/tmp/bluez-5.86/` analyzed.
+2. **`forward_report()` uses ATT Write Request (0x12), NOT Write Command (0x52)** — Our CHR_REPORT has `GATT_CHR_PROP_WRITE`, so `forward_report()` calls `gatt_write_char()` (0x12) instead of `gatt_write_cmd()` (0x52). Previous btmon filter for 0x52 may have missed actual writes. **Confirmed** — hog-lib.c lines 746-778.
+3. **`forward_report()` silently drops writes if report not found** — `find_report_by_rtype()` returns NULL when no matching output report is registered, and `forward_report()` logs `DBG("Unable to find report")` (usually compiled out) and returns. No error visible in normal BlueZ logs. **Confirmed** — hog-lib.c line 754.
+4. **`find_report()` bug: uses `hog->flags` instead of `hog->uhid_flags`** — For output reports, `find_report()` overrides the `numbered` parameter with `!!(hog->flags & UHID_DEV_NUMBERED_OUTPUT_REPORTS)`. `hog->flags` = 0x02 (HID Info byte 3 = "Normally Connectable"), `UHID_DEV_NUMBERED_OUTPUT_REPORTS` = 0x02 (bit 1). Result: `numbered=true` for all output reports (COINCIDENCE). **Confirmed** — hog-lib.c lines 698-701.
+5. **`bt_uhid_create()` doesn't set `ev.u.create2.flags`** — Kernel `report_numbered = false` for our device. This means the kernel sends `UHID_OUTPUT` events with `numbered=false` and `id=0x80`. **Confirmed** — hog-lib.c line 989-1019.
+6. **~~SET_SETTINGS 0x09 notification not delivered~~** — **TESTED AND FAILED (2026-06-28)**. We tried sending 45-byte ack notifications on handle 0x0033 with zeroed button bytes. This caused ghost inputs (phantom button presses). The notification was reverted. The missing SET_SETTINGS notification is NOT the haptics blocker. **Confidence: Disproven** — direct test with counter-evidence.
+7. **`0x17252a0` is dead code** — The haptic trigger function at 0x17252a0 has ZERO callers in steamclient.so. The checks inside it (+0x320, +0x308) are downstream and irrelevant to the current blocking. **Confidence: Confirmed** — multiple analysis methods agree.
+8. **`SDL.joystick.cap.rumble` is NOT the blocker** — Steam schedules haptics despite this hint. The capability gates bit 14 (0x4000) in the capability bitmask, but Steam is already trying to send haptics. **Confidence: Confirmed** — Steam logs show CPulseHapticWorkItem creation.
 
 ### Neptune vs SC2 Haptic Format
 - **SC2**: Dual LRA motors, 6 output report types (0x80-0x85)
@@ -90,9 +94,11 @@ HIDAPI_DriverSteamTriton_UpdateDevice() [every 6ms]:
 
 ### What Hasn't Been Tried
 - Real SC2 btmon capture — would answer all remaining questions in minutes
-- Writing directly to `/dev/hidrawN` on host — would test if forwarding path works
+- Writing directly to `/dev/hidrawN` on host — would test if `forward_report()` path works end-to-end
 - Investigating specific controller state/register values needed for haptics
-- **Diagnose why hog-ll never attempts SET_REPORT** — add logging to `_handle_write_cmd()` for all incoming Write Command (0x52) packets. **Key unknown**: whether SET_REPORT writes reach our ATT server or fail upstream in BlueZ.
+- Check btmon for ATT Write Request (0x12) to handle 0x0019 — previous filter only checked for 0x52 (Write Command), but `forward_report()` uses 0x12 (Write Request) because our CHR_REPORT has `GATT_CHR_PROP_WRITE`
+- Check Deck logs for "Write Request: handle=0x0019" — enhanced logging should capture this
+- Verify `find_report_by_rtype()` succeeds — if it returns NULL, `forward_report()` silently drops the write. Could be caused by wrong Report Reference descriptor or missing output report registration in BlueZ's report list
 
 ### SC2 → Neptune Haptic Translation
 
@@ -112,7 +118,7 @@ left_speed → left_intensity, right_speed → right_intensity, period=0
 - SC2 LRA precision haptics → Neptune ERM basic rumble (fidelity loss)
 - 5 of 6 SC2 haptic types unsupported — but games never use them
 
-**Status**: Translation code ready. Host never sends 0x80 output reports (btmon confirmed zero 0x52 packets). Blocked upstream — Steam doesn't call `SDL_RumbleJoystick()`.
+**Status**: Translation code ready. Host never sends 0x80 output reports. The `forward_report()` path uses ATT Write Request (0x12), not Write Command (0x52). Blocked upstream — Steam doesn't call `SDL_RumbleJoystick()` or writes don't reach our ATT server.
 
 ---
 

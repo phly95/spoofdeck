@@ -6,7 +6,7 @@ Make a Steam Deck present itself as a Steam Controller 2026 over Bluetooth Low E
 
 **Working**: Gamepad, trackpads, gyro, back buttons, standard HID input. Steam Client recognizes the Deck as an SC2 controller with full Steam Input features.
 
-**Not working**: Haptics. Root cause identified: BlueZ hog-ll SET_REPORT initialization fails (487 errors in btmon), preventing output report path from being established. Steam schedules haptic work items but writes are rejected at kernel level. See `docs/findings-backlog.md` for details.
+**Not working**: Haptics. BlueZ hog-lib.c source analysis (2026-06-29) identified the haptics path as `UHID_OUTPUT` -> `forward_report()`, NOT `UHID_SET_REPORT` -> `set_report()`. Our CHR_REPORT has `GATT_CHR_PROP_WRITE`, so `forward_report()` uses ATT Write Request (0x12), not Write Command (0x52). Previous btmon filters only checked for 0x52 and may have missed actual writes. Steam schedules haptic work items but writes are rejected at kernel level. See `docs/findings-backlog.md` for details.
 
 **Stable**: Registration completes reliably. No zombie disconnects after clearing stale BlueZ state.
 
@@ -112,7 +112,7 @@ evtest /dev/input/eventN
 
 ## Known Issues
 
-- **Haptics not working** — Steam never sends haptic output reports (0x52 packets). Likely a registration/state issue upstream in Steam/hog-ll. See `docs/findings-backlog.md`.
+- **Haptics not working** — Steam never sends haptic output reports. BlueZ hog-lib.c analysis (2026-06-29) shows the haptics path is `UHID_OUTPUT` -> `forward_report()` using ATT Write Request (0x12), NOT Write Command (0x52). Previous btmon filters may have missed writes. See `docs/findings-backlog.md`.
 - **PnP ID warning** — BlueZ logs `Error reading PNP_ID: Protocol error` (non-fatal)
 - **KDE pairing dialog** — Host shows dialog during pairing, user must click "yes"
 - **Stale BlueZ state** — After code changes break a connection, clear bond data and restart BlueZ daemon. See `AGENTS.md` for the fix.

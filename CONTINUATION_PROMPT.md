@@ -35,7 +35,7 @@ Everything works except haptics. On a **clean connection** (stale state cleared)
 
 The SET_SETTINGS notification hypothesis was **TESTED AND FAILED** (caused ghost inputs). It is NOT the blocker.
 
-The root cause is: **hog-ll's `forward_report()` is called but writes are not reaching our ATT server, OR the kernel never generates `UHID_OUTPUT` events.**
+The root cause is: **hog-ll's `forward_report()` path is the haptics mechanism, but writes may not be reaching our ATT server, OR `find_report_by_rtype()` is returning NULL and silently dropping them.**
 
 ## Investigation: BlueZ hog-lib.c Analysis (COMPLETED 2026-06-29)
 
