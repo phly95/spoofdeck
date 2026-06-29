@@ -36,36 +36,152 @@ We're building a fake Steam Controller 2026 (SC2) that spoofs a real SC2 over BL
 - **GATT/HID metadata is correct** — Report Map declares output report 0x80, CHR_REPORT exists at handle 0x0019 with correct properties, Report Reference is `[0x80, 0x02]`, write callback is registered.
 - **`rumble_enabled`/`haptics_enabled` are dead strings** — Zero code references in steamclient.so.
 
+## GATT Handle Map
+
+Key handles for haptic debugging:
+
+| Handle | UUID | Description |
+|--------|------|-------------|
+| 0x000A | 0x2800 | HID Service Declaration |
+| 0x000C | 0x2A4A | HID Information Value |
+| 0x000E | 0x2A4B | Report Map Value (77 bytes) |
+| 0x0010 | 0x2A4C | HID Control Point Value |
+| 0x0012 | 0x2A4D | **Gamepad Input (Report ID 0x01)** — 12 bytes, CCCD at 0x0014 |
+| 0x0016 | 0x2A4D | Output (Report ID 0x02) — 1 byte |
+| **0x0019** | **0x2A4D** | **Haptic Output (Report ID 0x80)** — 10 bytes, Report Ref `[80, 02]` at 0x001A |
+| 0x001C | 0x2A4D | Mouse Input (Report ID 0x03) — 4 bytes, CCCD at 0x001E |
+| 0x0020 | 0x2A4D | Keyboard Input (Report ID 0x04) — 8 bytes, CCCD at 0x0022 |
+| 0x0021 | 0x2A4D | Feature Report 0x00 — 64 bytes (SC2 command channel) |
+| 0x0024 | 0x2A4D | Feature Report 0x01 — 64 bytes |
+| 0x0027 | 0x2A4D | Feature Report 0x85 — 64 bytes (mode switch) |
+| 0x0033 | 0x2A4D | **SC2 Custom CHR_REPORT (Report ID 0x45)** — 45 bytes, CCCD at 0x0035 |
+| 0x0037 | 0x2A4D | SC2 Custom CHR_REPORT (Report ID 0x47) — 47 bytes, CCCD at 0x0039 |
+
 ## Key Files
 
 | File | Purpose |
 |------|---------|
 | `AGENTS.md` | Project continuation guide — read this first |
 | `HANDOFF.md` | Detailed status and what needs to happen next |
+| `CONTINUATION_PROMPT.md` | This file — quick start for new agents |
 | `src/main_l2cap.py` | Entrypoint — GLib main loop, SC2 command handler, haptic forwarding |
 | `src/att_server.py` | Raw L2CAP ATT server (CID 4) |
 | `src/gatt_db.py` | GATT database (85 attributes, 6 services) |
 | `src/input_handler.py` | Neptune HID → SC2 report mapping |
 | `src/agent.py` | BlueZ Agent1 (auto-confirm pairing) |
+| `src/adv.py` | BLE advertisement (LEAdvertisement1 D-Bus object) |
+| `src/bluez.py` | BlueZ D-Bus helpers |
 | `docs/findings-backlog.md` | Haptics deep dive and known issues |
 | `docs/sc2-protocol.md` | SC2 BLE protocol details |
 | `docs/att-server-implementation.md` | ATT protocol implementation |
 | `research/steamclient-reverse-session/findings.md` | RE findings from steamclient.so (sessions 1-7) |
+| `scripts/deploy.sh` | Deploy source files to Deck and restart service |
+| `scripts/config_bt.py` | Configure BT adapter (bredr off, static addr) |
+| `scripts/diagnose.sh` | Full Deck status diagnostic |
 
 ## Environment
 
 - **Deck IP**: 172.16.16.120
 - **Deck user**: deck / asdf
+- **Deck sudo**: asdf
 - **Host sudo**: qwerasdf
 - **Static BLE address**: C2:12:34:56:78:9A
 - **Host BT MAC**: 9C:B6:D0:8F:97:68
 - **SSH**: `sshpass -p 'asdf' ssh -o StrictHostKeyChecking=no deck@172.16.16.120`
 - **Source**: `/home/philip/spoofdeck-modified/src/`
+- **Remote destination**: `/tmp/sc2-spoof/src/`
+
+## Deployment Workflow
+
+```bash
+# 1. Deploy source files to Deck
+sshpass -p 'asdf' scp -o StrictHostKeyChecking=no /home/philip/spoofdeck-modified/src/*.py deck@172.16.16.120:/tmp/sc2-spoof/src/
+
+# 2. Restart service on Deck
+sshpass -p 'asdf' ssh -o StrictHostKeyChecking=no deck@172.16.16.120 \
+  "echo asdf | sudo -S systemctl stop sc2-hogp 2>/dev/null; \
+   echo asdf | sudo -S systemctl reset-failed sc2-hogp 2>/dev/null; \
+   echo asdf | sudo -S systemctl start bluetooth 2>/dev/null; \
+   sleep 2; \
+   echo asdf | sudo -S python3 /tmp/config_bt.py 2>&1; \
+   sleep 1; \
+   echo asdf | sudo -S systemd-run --remain-after-exit --unit=sc2-hogp --property=WorkingDirectory=/tmp/sc2-spoof python3 -u /tmp/sc2-spoof/src/main_l2cap.py --name 'Steam Controller 2026' 2>&1; \
+   sleep 3; \
+   echo asdf | sudo -S journalctl -u sc2-hogp -n 20 --no-pager 2>&1"
+
+# 3. Connect from host
+printf 'qwerasdf\n' | sudo -S bluetoothctl --timeout 15 connect C2:12:34:56:78:9A
+
+# 4. Check Deck logs
+sshpass -p 'asdf' ssh -o StrictHostKeyChecking=no deck@172.16.16.120 "echo asdf | sudo -S journalctl -u sc2-hogp --since '2 min ago' --no-pager 2>&1 | tail -40"
+```
+
+## Where to Find Logs
+
+### Steam Logs (on host)
+Steam writes controller logs to files. Look for:
+```bash
+# Find recent Steam logs mentioning haptics
+find /tmp -name "*.log" -newer /tmp -exec grep -l "haptic\|rumble\|CPulseHapticWorkItem\|CWriteFeatureReportWorkItem" {} \; 2>/dev/null
+find ~/.steam -name "*.log" -exec grep -l "haptic\|rumble" {} \; 2>/dev/null
+
+# Check Steam's controller support logs
+find ~/.steam -name "controller*.txt" -o -name "controller*.log" 2>/dev/null | head -10
+```
+
+The logs that show `CPulseHapticWorkItem(0) — running 0.0ms` confirm Steam IS scheduling haptics but the write fails instantly.
+
+### btmon Captures
+- Existing captures: `scratch/btmon_handshake.txt`, `scratch/sc2_haptic_test.log`
+- To capture fresh: `printf 'qwerasdf\n' | sudo -S btmon -t -w /tmp/btmon_capture.log &` on host, then connect from Deck
+
+### Deck Logs
+```bash
+# Last 40 lines
+sshpass -p 'asdf' ssh deck@172.16.16.120 "echo asdf | sudo -S journalctl -u sc2-hogp -n 40 --no-pager 2>&1"
+
+# Filter for haptics/SET_SETTINGS
+sshpass -p 'asdf' ssh deck@172.16.16.120 "echo asdf | sudo -S journalctl -u sc2-hogp --since '2 min ago' --no-pager 2>&1 | grep -i 'SET_SETTINGS\|0x87\|FEATURE REPORT\|haptic\|notification.*0x87'"
+```
 
 ## What Was Fixed (deployed but haptics still broken)
-1. Command 0x85/0x8D routing swap — FIXED in `main_l2cap.py:559-576`
-2. `_handle_mode_switch` byte parsing — FIXED in `main_l2cap.py:361-383`
-3. GET_SERIAL format (byte[1] 0x14 → 0x15, serial starts with 'F') — FIXED
+
+1. **Command 0x85/0x8D routing swap** — `main_l2cap.py:559-576`. Command 0x85 (SET_DEFAULT_DIGITAL_MAPPINGS) now just acknowledges, 0x8D (SET_CONTROLLER_MODE) handles mode switch.
+2. **`_handle_mode_switch` byte parsing** — `main_l2cap.py:361-383`. For SC2 command 0x8D, reads mode from `value[3]` (correct offset) instead of `value[0]` (Report ID).
+3. **GET_SERIAL format** — byte[1] changed from 0x14 to 0x15 (matches write command), serial starts with 'F' (0x46) to pass V_strncmp validation.
+
+## Exact Code Change for SET_SETTINGS Notification
+
+The fix is in `src/main_l2cap.py`, in the `_handle_sc2_command` method, inside the `SC2_CMD_SET_ATTRIBUTES` handler (around line 482-513).
+
+**Current code** (stores response but does NOT send notification):
+```python
+elif cmd == self.SC2_CMD_SET_ATTRIBUTES:
+    # ... stores response in _pending_fr_response ...
+    # NOTE: Do NOT send ack notification on CHR_REPORT handles.
+    # Sending non-zero data on input report handles causes phantom button presses
+```
+
+**What a real SC2 does** (from btmon capture):
+After each SET_SETTINGS write, the real SC2 sends a 64-byte notification on CHR_REPORT handle 0x0033:
+```
+ATT: Handle Value Notification (0x1b) len 66
+  Handle: 0x0033
+    Data: 870109000000000000...  (64 bytes: [0x87, 0x01, register, 0x00 × 61])
+```
+
+**The fix**: After storing the response, send it as a notification:
+```python
+elif cmd == self.SC2_CMD_SET_ATTRIBUTES:
+    # ... existing code to store response ...
+    
+    # Send notification on CHR_REPORT handle 0x0033 (matches real SC2 behavior)
+    if self.att_server and self._sc2_hid_handle:
+        notification = bytearray([0x87, 0x01, register]) + bytearray(61)
+        self.att_server.send_notification(self._sc2_hid_handle, bytes(notification))
+```
+
+**Why this might be safe**: The phantom button press issue was caused by sending on the WRONG handle (0x0012 gamepad) or with wrong length. The real SC2 sends on 0x0033 (SC2 Custom CHR_REPORT) with 64 bytes, which is distinguishable from 45-byte input reports.
 
 ## What To Do Next
 
@@ -97,3 +213,4 @@ During a new connection, capture btmon to see the actual SET_REPORT ATT packets 
 5. `SOL_BLUETOOTH` not in Python 3.13 — use numeric constant (274)
 6. Never use `ControllerMode=le` in main.conf — causes "Not Supported" error
 7. btmgmt power-cycles kill hogp — always start hogp AFTER config_bt.py
+8. `pii.env` has credentials — source it before running scripts: `source pii.env`
