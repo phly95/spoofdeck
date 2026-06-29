@@ -4,9 +4,9 @@ Make a Steam Deck present itself as a Steam Controller 2026 over Bluetooth Low E
 
 ## Current Status
 
-**Working**: Gamepad, trackpads, gyro, back buttons, standard HID input. Steam Client recognizes the Deck as an SC2 controller with full Steam Input features.
+**Working**: Gamepad, trackpads, gyro, back buttons, standard HID input, in-game rumble via `SDL_RumbleJoystick()`. Steam Client recognizes the Deck as an SC2 controller with full Steam Input features. In-game rumble confirmed working with Celeste hazard impacts.
 
-**Not working**: Haptics. BlueZ hog-lib.c source analysis (2026-06-29) identified the haptics path as `UHID_OUTPUT` -> `forward_report()`, NOT `UHID_SET_REPORT` -> `set_report()`. Our CHR_REPORT has `GATT_CHR_PROP_WRITE`, so `forward_report()` uses ATT Write Request (0x12), not Write Command (0x52). Previous btmon filters only checked for 0x52 and may have missed actual writes. Steam schedules haptic work items but writes are rejected at kernel level. See `docs/findings-backlog.md` for details.
+**Not working**: Steam-generated haptics (trackpad clicks, UI feedback) do NOT produce rumble. These come from Steam's internal haptic system, not from `SDL_RumbleJoystick()`. Only games that call `SDL_RumbleJoystick()` produce rumble.
 
 **Stable**: Registration completes reliably. No zombie disconnects after clearing stale BlueZ state.
 
@@ -80,9 +80,9 @@ evtest /dev/input/eventN
 - **Input capture**: Reads Neptune controller from `/dev/hidraw3` (64-byte HID reports)
 - **SC2 report mapping**: Neptune → 12-byte gamepad + 45-byte SC2 Custom (buttons, sticks, triggers, trackpads, gyro)
 - **Synthetic SC2 command handler**: Responds to GET_ATTRIBUTES, GET_SERIAL, SET_SETTINGS, etc.
-- **Lizard mode fix**: Periodically re-sends 0x81 command to prevent lizard mode re-enabling
+- **Lizard mode fix**: Periodically re-sends 0x81 command to prevent lizard mode re-enabling; EVIOCGRAB grabs event4/event5 at startup
 - **Auto-recovery**: Retries Neptune hidraw device on crash (2s delay, 10 retries)
-- **Haptic forwarding**: Code ready but host never sends haptic reports
+- **In-game rumble**: Full haptic pipeline confirmed working — games calling `SDL_RumbleJoystick()` produce rumble on Neptune motors via PackedRumbleReport format
 
 ## Project Structure
 
@@ -112,7 +112,7 @@ evtest /dev/input/eventN
 
 ## Known Issues
 
-- **Haptics not working** — Steam never sends haptic output reports. BlueZ hog-lib.c analysis (2026-06-29) shows the haptics path is `UHID_OUTPUT` -> `forward_report()` using ATT Write Request (0x12), NOT Write Command (0x52). Previous btmon filters may have missed writes. See `docs/findings-backlog.md`.
+- **Steam-generated haptics not working** — Trackpad clicks, UI feedback haptics do NOT produce rumble. These come from Steam's internal haptic system, not from `SDL_RumbleJoystick()`. Only games that call `SDL_RumbleJoystick()` produce rumble. See `docs/findings-backlog.md`.
 - **PnP ID warning** — BlueZ logs `Error reading PNP_ID: Protocol error` (non-fatal)
 - **KDE pairing dialog** — Host shows dialog during pairing, user must click "yes"
 - **Stale BlueZ state** — After code changes break a connection, clear bond data and restart BlueZ daemon. See `AGENTS.md` for the fix.
@@ -125,11 +125,12 @@ evtest /dev/input/eventN
 - **Protocol refinements** — Verifying our synthetic command responses match a real device
 - **Edge cases** — Things only a real device would trigger
 
-If you have a real SC2 and want to help, start with `docs/findings-backlog.md` for the full technical analysis.
+If you have a real SC2 and want to help, start with `docs/findings-backlog.md` for the full technical analysis. Key areas:
+- **Steam-generated haptics** — A btmon capture from a real SC2 would show what reports Steam sends for trackpad clicks and UI feedback, helping us understand why these don't reach Neptune motors
 
 ## Acknowledgments
 
 - SDL3 source for SC2 HID report format documentation
 - BlueZ source code (HOG profile, L2CAP reference)
 - SteamOS community research
-- InputPlumber project for Neptune protocol documentation
+- InputPlumber project for Neptune protocol documentation and PackedRumbleReport format

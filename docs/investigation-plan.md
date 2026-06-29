@@ -35,29 +35,27 @@ Deploy one change, capture results, evaluate. Don't add diagnostic logging AND f
 
 | Finding | Evidence | Confidence |
 |---------|----------|------------|
+| In-game rumble works via SDL_RumbleJoystick() | Celeste hazard impacts confirmed; full pipeline verified end-to-end | Confirmed |
+| Steam-generated haptics (trackpad clicks, UI feedback) do NOT produce rumble | Tested with Steam UI; no rumble observed. These use a different code path. | Confirmed |
 | Haptics path is `UHID_OUTPUT` -> `forward_report()`, NOT `UHID_SET_REPORT` -> `set_report()` | BlueZ 5.86 source analysis (2026-06-29), hog-lib.c lines 746-778 | Confirmed |
 | `forward_report()` uses ATT Write Request (0x12), NOT Write Command (0x52) | Our CHR_REPORT has `GATT_CHR_PROP_WRITE`, hog-lib.c line 770 | Confirmed |
 | `forward_report()` silently drops writes if `find_report_by_rtype()` returns NULL | hog-lib.c line 754: `DBG("Unable to find report")` + return | Confirmed |
 | `find_report()` bug: uses `hog->flags` instead of `hog->uhid_flags` for numbered flag | hog-lib.c lines 698-701. Coincidentally works: `hog->flags`=0x02 matches `UHID_DEV_NUMBERED_OUTPUT_REPORTS`=0x02 | Confirmed |
 | `bt_uhid_create()` doesn't set `ev.u.create2.flags` — kernel `report_numbered = false` | hog-lib.c lines 989-1019 | Confirmed |
-| Previous btmon filter for 0x52 may have missed actual writes | `forward_report()` uses 0x12 (Write Request), not 0x52 | Confirmed |
+| Rumble format matches InputPlumber's PackedRumbleReport | `[0xeb, 0x09, 0x00, 0x00, 0x00, left_lo, left_hi, right_lo, right_hi]` padded to 64 bytes | Confirmed |
+| Lizard mode commands use direct 0x81 (no Report ID prefix) | NEPTUNE_LIZARD_OFF_CMDS in input_handler.py; EVIOCGRAB grabs event4/event5 | Confirmed |
 | SET_SETTINGS notification hypothesis DISPROVEN | Test caused ghost inputs, reverted (2026-06-28) | Confirmed |
 | `set_report()` is kernel-initiated (device probe), NOT triggered by Steam writes | BlueZ 5.86 source analysis, hog-lib.c lines 845-900 | Confirmed |
-| On clean connection, zero Write Commands (0x52), zero SET_REPORT attempts, only Write Requests (0x12) to handle 0x0024 every 3s | Fresh btmon capture (2026-06-28) | Confirmed |
-| Steam schedules haptics but writes fail in 0.0ms | Steam log files | Confirmed |
-| Our code skips SET_SETTINGS notification | `main_l2cap.py:522-525` (comment) | Confirmed |
-| GATT metadata for haptic output is correct | `gatt_db.py`, `main_l2cap.py` | Confirmed |
 | `0x17252a0` is dead code (zero callers) | Multiple analysis methods agree | Confirmed |
 
 ## What We Don't Know
 
 | Question | Current Best Guess | What Would Confirm/Refute |
 |----------|-------------------|--------------------------|
-| Do haptic writes reach our ATT server via 0x12? | Unknown — `forward_report()` uses 0x12 (Write Request), but we only filtered btmon for 0x52. Previous captures may have missed writes. | Check btmon for ATT Write Request (0x12) to handle 0x0019. Enhanced Deck logging should capture incoming writes. |
-| Does `find_report_by_rtype()` succeed? | Unknown — if it returns NULL, `forward_report()` silently drops the write. Could be caused by wrong Report Reference descriptor or missing output report registration in BlueZ's report list. | Add logging to `_on_haptic_write()` to confirm if writes arrive. Check BlueZ report list initialization. |
-| Does BlueZ require SET_REPORT before output works? | **Previously assumed yes, but uncertain** — `set_report()` is kernel-initiated, not host-initiated. The kernel may not need SET_REPORT to succeed before allowing `UHID_OUTPUT` events. | Test: manually write to `/dev/hidrawN` on host, check if write reaches Deck. |
-| Does SET_SETTINGS notification affect haptics? | **NO — disproven by test** | N/A — tested 2026-06-28, caused ghost inputs |
-| Why does Steam not schedule haptics? | Steam DOES schedule haptics (`CPulseHapticWorkItem` in logs) but writes fail in 0.0ms. The issue is at the kernel/BlueZ level, not Steam scheduling. | Test manual write to `/dev/hidrawN` to bypass Steam scheduling. |
+| Why do Steam-generated haptics not produce rumble? | Steam's internal haptic system uses a different code path than `SDL_RumbleJoystick()`. Trackpad clicks and UI feedback haptics do not reach Neptune motors. | A real SC2 btmon capture would show what reports Steam sends for UI haptics. |
+| What report types does Steam use for UI haptics? | Possibly 0x81-0x85 (pulse, command, LFO, sweep, script) rather than 0x80 (rumble) | Check btmon for non-0x80 output reports during Steam UI interaction |
+| Does `find_report_by_rtype()` succeed for in-game rumble? | Yes — confirmed by working end-to-end pipeline with Celeste | N/A — already confirmed |
+| Do haptic writes reach our ATT server via 0x12? | Yes — confirmed by working end-to-end pipeline with Celeste | N/A — already confirmed |
 
 ---
 
@@ -83,7 +81,7 @@ Then restart Deck service. This is NOT optional — stale state is the #1 cause 
 5. Count: how many 0x12 per handle? How many 0x52 per handle? How many errors per error code?
 6. Check specifically for 0x12 to handle 0x0019 — this is where `forward_report()` sends haptics
 
-**This step alone may reveal the root cause.** Previous btmon filters only checked for 0x52 (Write Command), but `forward_report()` uses 0x12 (Write Request) because our CHR_REPORT has `GATT_CHR_PROP_WRITE`. We may have missed actual haptic writes.
+**This step is now partially resolved.** In-game rumble via `SDL_RumbleJoystick()` is confirmed working. The remaining question is why Steam-generated haptics (trackpad clicks, UI feedback) do NOT produce rumble.
 
 ### Step 2: Add Diagnostic Logging (One Change)
 
@@ -104,36 +102,35 @@ Add to `_handle_write_cmd()` AND `_handle_write()` in `att_server.py`:
 5. Capture Deck logs
 6. Compare btmon vs Deck logs — do they agree?
 
-### Step 4: Fix Based on Findings
+### Step 4: Investigate Steam-Generated Haptics
 
-**If haptic writes (0x12 to handle 0x0019) reach our ATT server:**
-- Check if `_on_haptic_write()` is being called
-- Check if `find_report_by_rtype()` succeeds in BlueZ (may need BlueZ debug logging)
-- The issue is in BlueZ's `forward_report()` -> `find_report_by_rtype()` returning NULL
+In-game rumble is confirmed working. The remaining question is why Steam-generated haptics (trackpad clicks, UI feedback) do NOT produce rumble.
 
-**If haptic writes never reach our ATT server:**
-- The issue is in BlueZ's `forward_report()` not being called at all
-- Check if `UHID_OUTPUT` events are generated by the kernel
-- Check if BlueZ's uhid callback is registered correctly
-- Manually test: write to `/dev/hidrawN` on host, check if write reaches Deck
+**If Steam uses report types 0x81-0x85 for UI haptics:**
+- Our `_on_haptic_write()` only handles 0x80 (rumble). Add handlers for 0x81-0x85.
+- Check btmon for non-0x80 output reports during Steam UI interaction.
 
-**If SET_REPORT (0x52) appears but no haptic writes (0x12):**
-- SET_REPORT is kernel-initiated (device probe), not host-initiated
-- The absence of SET_REPORT means the kernel hasn't probed the device for reports
-- This may or may not affect `UHID_OUTPUT` — test manually
+**If Steam's internal haptic path doesn't go through SDL_hid_write():**
+- Steam may have a direct HID write path that bypasses SDL.
+- Check if Steam writes to a different device file.
+
+**If Steam haptics need specific register values:**
+- SET_SETTINGS configures registers that gate haptic behavior.
+- Check if certain registers aren't set correctly for UI haptics.
 
 ### Step 5: ~~If Step 4 Fix Works — Add SET_SETTINGS Notification~~ DISPROVEN
 
 The SET_SETTINGS notification hypothesis was tested on 2026-06-28 and **failed**. Sending 45-byte ack notifications on handle 0x0033 caused ghost inputs (phantom button presses). The notification was reverted. This step is no longer applicable.
 
-**Updated priority**: After confirming whether haptic writes reach the ATT server (Step 4), focus on the `forward_report()` -> `find_report_by_rtype()` path. If writes arrive but are silently dropped, the issue is in BlueZ's report matching logic.
+**Updated priority**: After confirming in-game rumble works, focus on investigating Steam-generated haptics (trackpad clicks, UI feedback). These use a different code path than `SDL_RumbleJoystick()`.
 
 ### Step 6: Verify End-to-End
 
-1. Deck logs show `_on_haptic_write()` being called (for ATT Write Request 0x12 to handle 0x0019)
-2. btmon shows ATT Write Request (0x12) to handle 0x0019 (NOT Write Command 0x52)
-3. Steam logs show haptic work items completing in > 0.0ms
-4. (Optional) Audible rumble during gameplay
+1. Deck logs show `_on_haptic_write()` being called (for ATT Write Request 0x12 to handle 0x0019) — **CONFIRMED for in-game rumble**
+2. btmon shows ATT Write Request (0x12) to handle 0x0019 (NOT Write Command 0x52) — **CONFIRMED for in-game rumble**
+3. Steam logs show haptic work items completing in > 0.0ms — **CONFIRMED for in-game rumble**
+4. Audible rumble during gameplay — **CONFIRMED with Celeste hazard impacts**
+5. **Remaining**: Steam-generated haptics (trackpad clicks, UI feedback) do NOT produce rumble — investigate in Step 4
 
 ---
 
