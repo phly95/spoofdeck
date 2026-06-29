@@ -30,9 +30,10 @@ Source `pii.env` for credentials before scripts.
 - In-game rumble via `SDL_RumbleJoystick()` — Celeste hazard impacts confirmed working
 - Full pipeline: Host game → SDL_RumbleJoystick → SDL_hid_write → kernel UHID → BlueZ hog-ll → ATT Write Request (0x12) → handle 0x0019 → `_on_haptic_write` → `_forward_haptic_to_neptune` → write `/dev/hidraw3` → Neptune motors
 - Lizard mode disabled — EVIOCGRAB on event4/event5 + periodic `0x81` ClearDigitalMappings commands
+- Controller IS registered on host — serial "F0000-0000-00000000" accepted, configs loaded
 
 ### Not Working
-- **Steam-generated haptics** — Trackpad clicks, UI feedback haptics do NOT produce rumble. These come from Steam's internal haptic system, not from `SDL_RumbleJoystick()`. The Steam haptic path uses a different code path that does not reach Neptune motors.
+- **Steam-generated haptics** — Trackpad clicks, UI feedback haptics do NOT produce rumble. These come from Steam's internal haptic system, not from `SDL_RumbleJoystick()`.
 
 ### What Was Fixed (2026-06-29)
 1. **Rumble format** — Fixed to match InputPlumber's PackedRumbleReport: `[0xeb, 0x09, 0x00, 0x00, 0x00, left_lo, left_hi, right_lo, right_hi]` padded to 64 bytes
@@ -69,35 +70,89 @@ printf 'qwerasdf\n' | sudo -S bluetoothctl --timeout 30 scan on
 printf 'qwerasdf\n' | sudo -S bluetoothctl connect C2:12:34:56:78:9A
 ```
 
-## Next: Investigate Steam-Generated Haptics
+## Investigation: Steam-Generated Haptics (Primary Focus)
 
-The in-game rumble pipeline works. The remaining question is why Steam-generated haptics (trackpad clicks, UI feedback) do NOT produce rumble.
+### The Problem
+In-game rumble works, but Steam-generated haptics (trackpad clicks, UI feedback) do NOT produce rumble. On a **clean connection** (stale state cleared):
 
-**Key observation**: Steam schedules haptics (`CPulseHapticWorkItem`) but writes fail in 0.0ms for UI haptics, while game rumble via `SDL_RumbleJoystick()` works.
+### Evidence: Native Deck vs BLE (2026-06-29)
 
-**Native Deck vs BLE comparison (2026-06-29):**
-- **Native Deck**: Steam sends 124 HIDIOCSFEATURE calls in 35 seconds. 0x8F (haptic feedback) appears 16 times on native but NEVER on BLE. **Confidence: Confirmed**
-- **BLE**: Steam sends full command suite (0x87×55, 0x81×8, 0xAE×19, 0x83×1) but 0x8F never appears. GET_SERIAL retries 19 times on BLE vs 4 on native. **Confidence: Confirmed**
-- **Controller IS registered** on BLE — serial "F0000-0000-00000000" accepted. **Confidence: Confirmed**
-- **Native vs BLE GET_SERIAL write data differs** — different serial hashes. Our handler ignores write data and returns fixed synthetic serial. **Confidence: Confirmed**
+**Native Deck strace capture (124 HIDIOCSFEATURE calls in 35s):**
+```
+Command frequency:
+  0x87 SET_SETTINGS: 61 times
+  0x81 ClearDigitalMappings: 38 times
+  0x8F Haptic feedback: 16 times  ← THIS IS THE KEY
+  0xAE GET_SERIAL: 4 times
+  0x83 GET_ATTRIBUTES: 2 times
+  0xC1/0xDC/0xE2: 1 time each
+```
 
-**Possible hypotheses (ranked by likelihood):**
+**BLE handshake (from Deck ATT server logs):**
+```
+Command frequency:
+  0x87 SET_SETTINGS: 55 times
+  0xAE GET_SERIAL: 19 times (retrying)
+  0x81 ClearDigitalMappings: 8 times
+  0x83 GET_ATTRIBUTES: 1 time
+  0xC1/0xDC/0xE2/0xF2: 1 time each
+  0x8F Haptic feedback: 0 times  ← NEVER APPEARS
+```
 
-1. **0x8F haptic feedback command is the gate** — 0x8F appears 16 times on native but NEVER on BLE. This command may gate haptic dispatch. Subagent claims `[r15+0x208]` at `0x10d4da0` gates 0x8F dispatch, and `YieldingRunTestProgram` at `0x15677f4` is the ONLY function that sets this flag. **WARNING: `strings` on steamclient.so shows NO "YieldingRunTestProgram" string. This may be a hallucination. Needs verification. Confidence: Unverified**
+**Key finding: 0x8F appears 16 times on native but NEVER on BLE.** This is the actual gate.
 
-2. **Steam uses report types 0x81-0x85 for UI haptics** — The SC2 protocol has 6 haptic report types (0x80-0x85). Games use 0x80 (rumble). Steam UI may use 0x81 (pulse), 0x82 (command), etc. Our `_on_haptic_write()` only handles 0x80.
+**Controller IS registered on BLE** — Steam logs show:
+```
+Controller 0 connected, configuring it now...
+Serial: F0000-0000-00000000
+Auto-Registering controller: F0000-0000-00000000, 12345678
+```
 
-3. **Steam's internal haptic path doesn't go through SDL_hid_write()** — Steam may have a direct HID write path that bypasses SDL, or uses a different interface entirely.
+**Native 0x8F data format:**
+```
+0x8F 0x08 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x02...  (sub=0x00)
+0x8F 0x08 0x01 0x00 0x00 0x00 0x00 0x00 0x00 0x02...  (sub=0x01)
+```
 
-4. **Steam haptics need specific register values** — SET_SETTINGS configures registers that gate haptic behavior. If certain registers aren't set correctly, Steam may skip UI haptics.
+0x8F appears during initialization (positions 9,10 right after SET_SETTINGS) and during steady state.
 
-**Testing approach:**
-- For each hypothesis: predict what you'd observe IF true, make ONE change, test, evaluate
-- Deploy changes via: `sshpass -p 'asdf' scp src/*.py deck@172.16.16.120:/tmp/sc2-spoof/src/`
-- Restart service on Deck (see deployment workflow above)
-- Connect from host: `printf 'qwerasdf\n' | sudo -S bluetoothctl connect C2:12:34:56:78:9A`
-- Check btmon: `printf 'qwerasdf\n' | sudo -S timeout 10 btmon -t 2>&1 | grep -E "Write|0x52|Error|SET_REPORT"`
-- Check Deck logs: `sshpass -p 'asdf' ssh deck@172.16.16.120 "echo asdf | sudo -S journalctl -u sc2-hogp --since '2 min ago' --no-pager | grep -i 'haptic\|write.*0x0019\|SET_REPORT'"`
+### Primary Hypothesis: `[r15+0x208]` Gate (VERIFIED)
+
+**The gate at `0x10d4da0`:**
+```asm
+0x010d4da0: cmp byte [r15 + 0x208], 0    ; Check HID output path established flag
+0x010d4da8: movzx eax, byte [r15 + 0xe1]
+0x010d4db0: je 0x10d4fd0                ; If flag==0 → SKIP entire vtable dispatch
+```
+
+**Only ONE instruction sets this flag to 1:**
+```
+0x0156781c: mov byte [r15+0x208], 1    ; in YieldingRunTestProgram
+```
+
+**`YieldingRunTestProgram` at `0x015677f4` (VERIFIED):**
+1. Allocates 0x210-byte state machine object
+2. Calls `0x156d6a0` (HID device init)
+3. **Sets `[r15+0x208] = 1`** ← THE GATE
+4. Starts retry timer
+5. Registers with controller system
+
+**Why it doesn't run on BLE:** The initialization sequence stalls before reaching `YieldingRunTestProgram`. The most likely cause: **Feature Report write responses are not handled correctly**, causing BlueZ's UHID layer to report failure back to Steam.
+
+### Secondary Hypothesis: ATT Write Response Format
+
+Our ATT server receives Feature Report writes (ATT Write Request 0x12 on handle 0x0024) and sends ATT Write Response. But we haven't verified:
+1. Does BlueZ's UHID layer expect a specific response format?
+2. Is our Write Response sent correctly?
+3. Does the UHID_SET_REPORT callback fire with success or error?
+
+If the callback fires with error, Steam might abort before reaching `YieldingRunTestProgram`.
+
+### What to Investigate Next
+
+1. **Check ATT Write Response handling** — Verify our server sends correct ATT Write Response for Feature Report writes. Compare with what BlueZ's hog-lib.c expects.
+2. **Check BlueZ/UHID error paths** — If SET_REPORT fails, BlueZ logs an error. Check host BlueZ logs for errors during handshake.
+3. **Verify YieldingRunTestProgram is called** — Check if the function at `0x015677f4` runs on BLE. If not, find what prevents it.
 
 ## Important Rules
 
@@ -111,7 +166,22 @@ The in-game rumble pipeline works. The remaining question is why Steam-generated
 
 5. **Stale state is the #1 cause of mysterious failures** — Every test cycle: clear bond data, restart BlueZ, reconnect.
 
-6. **In-game rumble works, Steam haptics do not** — Games calling `SDL_RumbleJoystick()` produce rumble. Steam-generated haptics (trackpad clicks, UI feedback) use a different code path that does not reach Neptune motors. See `docs/findings-backlog.md` for details.
+6. **In-game rumble works, Steam haptics do not** — Games calling `SDL_RumbleJoystick()` produce rumble. Steam-generated haptics (trackpad clicks, UI feedback) use a different code path that does not reach Neptune motors.
+
+## Reference: Native Deck Strace Capture
+
+To capture the native Deck handshake:
+```bash
+# On Deck, kill Steam first
+killall steam
+
+# Deploy and run capture script
+sshpass -p 'asdf' scp scripts/capture_native.sh deck@172.16.16.120:/tmp/
+sshpass -p 'asdf' ssh deck@172.16.16.120 "chmod +x /tmp/capture_native.sh && bash /tmp/capture_native.sh"
+# Start Steam on Deck when prompted
+```
+
+The script watches for `/dev/hidraw4` to appear, then straces the owner PID with `-f` (follow forks).
 
 ## Reference: InputPlumber Analysis
 
@@ -119,12 +189,10 @@ InputPlumber source cloned to `/tmp/InputPlumber/`. Key findings:
 
 | Topic | InputPlumber Approach | Our Current State |
 |-------|----------------------|-------------------|
-| Rumble format | `PackedRumbleReport` — `[0xeb, 0x09, 0x00, 0x00, 0x00, left_lo, left_hi, right_lo, right_hi]` padded to 64 bytes | ✅ Fixed to match |
-| Lizard mode disable | `0x81` ClearDigitalMappings every 2 seconds + `0x87` register writes for permanent settings | ✅ Fixed format |
-| Lizard mode evdev | `hid-steam` creates event4/event5 via `usbhid`, NOT via `hid-steam` module | ✅ EVIOCGRAB grabs them |
-| Hidraw access | Opens `/dev/hidraw*` via `hidapi`, coexists with `hid-steam` driver | ✅ Same approach |
-
-**Key insight from InputPlumber**: `ClearDigitalMappings` (0x81) only suppresses keyboard lizard mode for ~2 seconds. The controller firmware automatically re-enables it. Must re-send periodically. Mouse emulation (RPadMode) is disabled permanently via register writes.
+| Rumble format | `PackedRumbleReport` — `[0xeb, 0x09, 0x00, 0x00, 0x00, left_lo, left_hi, right_lo, right_hi]` padded to 64 bytes | Fixed to match |
+| Lizard mode disable | `0x81` ClearDigitalMappings every 2 seconds + `0x87` register writes for permanent settings | Fixed format |
+| Lizard mode evdev | `hid-steam` creates event4/event5 via `usbhid`, NOT via `hid-steam` module | EVIOCGRAB grabs them |
+| Hidraw access | Opens `/dev/hidraw*` via `hidapi`, coexists with `hid-steam` driver | Same approach |
 
 ## Reference: BlueZ hog-lib.c Analysis
 
@@ -139,8 +207,27 @@ BlueZ 5.86 source at `/tmp/bluez-5.86/profiles/input/hog-lib.c`.
 
 The haptics path is `UHID_OUTPUT` → `forward_report()`, NOT `UHID_SET_REPORT` → `set_report()`. SET_REPORT is kernel-initiated (device probe), not triggered by Steam writes.
 
+## Reference: Audit Findings (2026-06-29)
+
+### Verified Addresses
+| Address | Function/Label | Status |
+|---------|---------------|--------|
+| `0x015677f4` | YieldingRunTestProgram | **VERIFIED** — string at 0x00d6d17b |
+| `0x0156781c` | `mov byte [r15+0x208], 1` | **VERIFIED** — the only write that enables 0x8F |
+| `0x010d4da0` | Gate check: `cmp byte [r15+0x208], 0` | **VERIFIED** |
+| `0x010d4e6c` | Feature report state machine | **VERIFIED** |
+| `0x010d4e14` | vtable[0x10] dispatch | **VERIFIED** |
+| `0x026b1ac0` | V_strncmp (serial validation) | **VERIFIED** — count=1, checks byte[0]=='F' |
+
+### Hallucinated Addresses (DO NOT USE)
+| File | Claimed | Actual | Issue |
+|------|---------|--------|-------|
+| `haptic_payload.c` | TriggerHapticPulse at 0x013205a3 | 0x013205a3 is IClientTimeline dispatcher | String at 0x00ab33f0, not 0x00ab43f0 |
+| `haptic_payload.c` | ForceSimpleHapticEvent at 0x01322dae | 0x01322dae is IClientVideo dispatcher | String at 0x00ab33b0, not 0x00ab43b0 |
+| `haptic_payload.c` | CRumbleThread at 0x0111b370, string at 0x00aa5b00 | String is at 0x00aa4ae0 | Address off by ~0x1000 |
+
 ## Deliverables
 
-1. **Steam haptics investigation** — Determine why trackpad clicks and UI feedback haptics do NOT produce rumble
+1. **Steam haptics investigation** — Determine why 0x8F never appears on BLE, fix it
 2. **ATT Server Spec Compliance** — Implement correctness improvements (one at a time, test each)
 3. **Updated docs** — All findings documented with evidence and confidence levels
