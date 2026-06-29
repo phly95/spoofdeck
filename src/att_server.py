@@ -404,10 +404,11 @@ class AttServer:
 
         attr = self.db.lookup(handle)
         if attr is None:
+            print(f"[att] ❌ Write Request FAILED: handle=0x{handle:04x} ERR_INVALID_HANDLE (attr not found)")
             self._send_error(opcode, handle, ATT_ERR_INVALID_HANDLE)
             return
 
-        print(f"[att] Write: handle=0x{handle:04x} uuid={attr.uuid.hex()} len={len(value)} data={value.hex()}")
+        print(f"[att] ✅ Write Request: handle=0x{handle:04x} uuid={attr.uuid.hex()} len={len(value)} data={value.hex()}")
         
         # Record all writes for diagnostics
         ts = time.strftime('%H:%M:%S')
@@ -450,8 +451,10 @@ class AttServer:
 
         attr = self.db.lookup(handle)
         if attr:
-            print(f"[att] Write Cmd: handle=0x{handle:04x} uuid={attr.uuid.hex()} len={len(value)} data={value.hex()}")
+            print(f"[att] ✅ Write Command: handle=0x{handle:04x} uuid={attr.uuid.hex()} len={len(value)} data={value.hex()}")
             self.db.write_attribute(handle, value)
+        else:
+            print(f"[att] ❌ Write Command FAILED: handle=0x{handle:04x} ERR_INVALID_HANDLE (attr not found)")
 
     def _send_error(self, request_opcode, handle, error_code):
         """Send ATT Error Response."""
