@@ -19,16 +19,17 @@ We're building a fake Steam Controller 2026 (SC2) that spoofs a real SC2 over BL
 
 ## Haptics Root Cause (CONFIRMED via multi-agent investigation)
 
-### Primary Blocker: BlueZ hog-ll SET_REPORT Failure
-- BlueZ hog-ll tries SET_REPORT ~100 times/second to configure output reports and fails (487 errors in btmon)
-- Without SET_REPORT success, the output report path is never established
+### Primary Blocker: BlueZ hog-ll Never Attempts SET_REPORT
+- On a clean connection (stale state cleared), BlueZ hog-ll never tries to configure output reports via SET_REPORT
+- Without SET_REPORT, the output report path is never established
 - Steam DOES schedule `CPulseHapticWorkItem` (confirmed in Steam logs) but the write completes in 0.0ms — rejected at kernel level
 - btmon shows zero ATT Write Command (0x52) packets for haptics
 
-### Contributing Factor: SET_SETTINGS 0x09 Notification Not Delivered
-- Real SC2 sends notification `[0x87, 0x01, register, 0x00 × 61]` on CHR_REPORT handle 0x0033 after each SET_SETTINGS write
-- Our code intentionally skips this (to avoid phantom button presses — see `main_l2cap.py:522`)
-- Steam retries SET_SETTINGS 0x09 every ~3 seconds forever, never completing the state machine
+### ~~Contributing Factor: SET_SETTINGS 0x09 Notification Not Delivered~~ — DISPROVEN
+- ~~Real SC2 sends notification `[0x87, 0x01, register, 0x00 × 61]` on CHR_REPORT handle 0x0033 after each SET_SETTINGS write~~
+- ~~Our code intentionally skips this (to avoid phantom button presses — see `main_l2cap.py:522`)~~
+- ~~Steam retries SET_SETTINGS 0x09 every ~3 seconds forever, never completing the state machine~~
+- **TESTED AND FAILED (2026-06-28)**: Sending 45-byte ack notifications on handle 0x0033 caused ghost inputs (phantom button presses). The notification was reverted. This is NOT the haptics blocker.
 
 ### What We Know Does NOT Block Haptics
 - **`0x17252a0` is DEAD CODE** — The haptic trigger function at 0x17252a0 has ZERO callers in steamclient.so. The checks inside it (+0x320, +0x308) are irrelevant.
@@ -51,11 +52,13 @@ Key handles for haptic debugging:
 | **0x0019** | **0x2A4D** | **Haptic Output (Report ID 0x80)** — 10 bytes, Report Ref `[80, 02]` at 0x001A |
 | 0x001C | 0x2A4D | Mouse Input (Report ID 0x03) — 4 bytes, CCCD at 0x001E |
 | 0x0020 | 0x2A4D | Keyboard Input (Report ID 0x04) — 8 bytes, CCCD at 0x0022 |
-| 0x0021 | 0x2A4D | Feature Report 0x00 — 64 bytes (SC2 command channel) |
-| 0x0024 | 0x2A4D | Feature Report 0x01 — 64 bytes |
-| 0x0027 | 0x2A4D | Feature Report 0x85 — 64 bytes (mode switch) |
-| 0x0033 | 0x2A4D | **SC2 Custom CHR_REPORT (Report ID 0x45)** — 45 bytes, CCCD at 0x0035 |
+| **0x0024** | **0x2A4D** | **Feature Report 0x00 — 64 bytes (SC2 command channel)**, Report Ref at 0x0025 |
+| 0x0027 | 0x2A4D | Feature Report 0x01 — 64 bytes, Report Ref at 0x0028 |
+| 0x002A | 0x2A4D | Feature Report 0x85 — 64 bytes (mode switch), Report Ref at 0x002B |
+| **0x0033** | **0x2A4D** | **SC2 Custom CHR_REPORT (Report ID 0x45)** — 45 bytes, CCCD at 0x0035 |
 | 0x0037 | 0x2A4D | SC2 Custom CHR_REPORT (Report ID 0x47) — 47 bytes, CCCD at 0x0039 |
+| 0x003C | 0x2A19 | Battery Level — CCCD at 0x003D |
+| 0x004F | Custom | Valve Custom Service SC2_INPUT_CH1 — 45 bytes, CCCD at 0x0050 |
 
 ## Key Files
 
@@ -150,49 +153,19 @@ sshpass -p 'asdf' ssh deck@172.16.16.120 "echo asdf | sudo -S journalctl -u sc2-
 2. **`_handle_mode_switch` byte parsing** — `main_l2cap.py:361-383`. For SC2 command 0x8D, reads mode from `value[3]` (correct offset) instead of `value[0]` (Report ID).
 3. **GET_SERIAL format** — byte[1] changed from 0x14 to 0x15 (matches write command), serial starts with 'F' (0x46) to pass V_strncmp validation.
 
-## Exact Code Change for SET_SETTINGS Notification
+## ~~Exact Code Change for SET_SETTINGS Notification~~ — DISPROVEN
 
-The fix is in `src/main_l2cap.py`, in the `_handle_sc2_command` method, inside the `SC2_CMD_SET_ATTRIBUTES` handler (around line 482-513).
+**DO NOT IMPLEMENT** — This was tested on 2026-06-28 and caused ghost inputs (phantom button presses). The notification was reverted. The missing SET_SETTINGS notification is NOT the haptics blocker.
 
-**Current code** (stores response but does NOT send notification):
-```python
-elif cmd == self.SC2_CMD_SET_ATTRIBUTES:
-    # ... stores response in _pending_fr_response ...
-    # NOTE: Do NOT send ack notification on CHR_REPORT handles.
-    # Sending non-zero data on input report handles causes phantom button presses
-```
-
-**What a real SC2 does** (from btmon capture):
-After each SET_SETTINGS write, the real SC2 sends a 64-byte notification on CHR_REPORT handle 0x0033:
-```
-ATT: Handle Value Notification (0x1b) len 66
-  Handle: 0x0033
-    Data: 870109000000000000...  (64 bytes: [0x87, 0x01, register, 0x00 × 61])
-```
-
-**The fix**: After storing the response, send it as a notification:
-```python
-elif cmd == self.SC2_CMD_SET_ATTRIBUTES:
-    # ... existing code to store response ...
-    
-    # Send notification on CHR_REPORT handle 0x0033 (matches real SC2 behavior)
-    if self.att_server and self._sc2_hid_handle:
-        notification = bytearray([0x87, 0x01, register]) + bytearray(61)
-        self.att_server.send_notification(self._sc2_hid_handle, bytes(notification))
-```
-
-**Why this might be safe**: The phantom button press issue was caused by sending on the WRONG handle (0x0012 gamepad) or with wrong length. The real SC2 sends on 0x0033 (SC2 Custom CHR_REPORT) with 64 bytes, which is distinguishable from 45-byte input reports.
+The hypothesis was: After processing SET_SETTINGS (command 0x87), send the echo response as a 64-byte ATT notification on CHR_REPORT handle 0x0033. This was tested and failed.
 
 ## What To Do Next
 
-### Priority 1: Fix SET_SETTINGS notification delivery
-After processing SET_SETTINGS (command 0x87), send the echo response as a 64-byte ATT notification on CHR_REPORT handle 0x0033. Format: `[0x87, 0x01, register, 0x00 × 61]`. This matches what a real SC2 does and may unblock Steam's state machine.
+### Priority 1: Diagnose why hog-ll never attempts SET_REPORT
+On a clean connection (stale state cleared), BlueZ hog-ll never tries to configure output reports via SET_REPORT. Add diagnostic logging to `_handle_write_cmd()` in `att_server.py` to capture ALL incoming Write Command (0x52) packets. **Key unknown**: whether SET_REPORT writes reach our ATT server or fail upstream in BlueZ.
 
-### Priority 2: Diagnose why hog-ll SET_REPORT fails
-Add diagnostic logging to `_handle_write_cmd()` in `att_server.py` to capture ALL incoming Write Command (0x52) packets. The btmon shows zero writes to output handles (0x0019, 0x0017), which means either hog-ll gives up after initial failure, or the writes use a different opcode.
-
-### Priority 3: Capture fresh btmon on host
-During a new connection, capture btmon to see the actual SET_REPORT ATT packets and their error responses. The current btmon capture may be missing critical initialization packets.
+### Priority 2: Capture fresh btmon on host
+During a new connection, capture btmon to see the actual initialization sequence. The fresh btmon evidence (2026-06-28) shows zero Write Commands (0x52) — host never sends haptic output reports. Connection is clean with only Write Requests (0x12) to handle 0x0024 (SET_SETTINGS 0x87) every 3 seconds.
 
 ## Reverse Engineering Context
 
@@ -202,7 +175,7 @@ During a new connection, capture btmon to see the actual SET_REPORT ATT packets 
 - `SDL.joystick.cap.rumble` at `0x00d0d093` gates bit 14 but is NOT the blocker
 - `rumble_enabled`/`haptics_enabled` are dead strings — no code references
 - The haptic path goes through: Steam → SDL3 → SDL_hid_write → BlueZ hog-ll → ATT Write Command (0x52) → BLE
-- BlueZ hog-ll tries SET_REPORT for output reports during HOG initialization and fails (487 errors)
+- BlueZ hog-ll never attempts SET_REPORT for output reports on a clean connection. Without SET_REPORT, the output report path is never established and haptic writes from Steam are rejected at kernel level.
 
 ## Known Gotchas
 

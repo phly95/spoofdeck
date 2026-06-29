@@ -19,7 +19,7 @@ We present the **Steam Deck** as a **Steam Controller 2026 (SC2 / Triton)** over
 │  │  └─ Raw L2CAP ATT server thread                     │ │
 │  │     └─ Binds to C2:12:34:56:78:9A CID 4             │ │
 │  │     └─ Handles ATT PDU exchange (MTU, discovery)    │ │
-│  │     └─ Serves GATT database (82 attributes, 6 services)│ │
+│  │     └─ Serves GATT database (85 attributes, 6 services)│ │
 │  └─────────────────────────────────────────────────────┘ │
 │                                                          │
 │  BlueZ handles:                                          │
@@ -52,7 +52,7 @@ We present the **Steam Deck** as a **Steam Controller 2026 (SC2 / Triton)** over
 - **PnP ID**: USB-IF source (0x02), Valve VID (0x28DE), PID (0x1303).
 - **Physical Deck Input Capture**: Reads Neptune controller `/dev/hidraw3` (64-byte HID reports).
 - **Neptune Auto-Recovery**: Reopens hidraw on crash (2s delay, 10 retries).
-- **45-byte SC2 Custom Reports**: Full Triton 32-bit button bitmask (verified from SDL3 `TritonButtons` enum), analog sticks, triggers, trackpads, IMU, force sensors. Sent on CHR_REPORT handles 0x0033 and 0x003c.
+- **45-byte SC2 Custom Reports**: Full Triton 32-bit button bitmask (verified from SDL3 `TritonButtons` enum), analog sticks, triggers, trackpads, IMU, force sensors. Sent on CHR_REPORT handles 0x0033 and 0x004f.
 - **Standard HID Gamepad Reports**: 12-byte reports on handle `0x0012` with buttons, analog sticks (Y axis corrected), triggers. Host creates `/dev/input/eventN`.
 - **Lizard Mode Mouse/Keyboard**: Relative mouse (right trackpad) and keyboard reports on handles `0x0019`/`0x001d`.
 - **Trackpads work** — Left/right trackpad X/Y data flows in 45-byte reports.
@@ -100,13 +100,13 @@ We present the **Steam Deck** as a **Steam Controller 2026 (SC2 / Triton)** over
 
 ### 3. Haptics (PRIMARY REMAINING ISSUE)
 - **Status**: Host never sends haptic output reports (btmon confirmed zero ATT Write Command 0x52 packets). The haptic forwarding code is ready — `_on_haptic_write()` on handle 0x0019 correctly parses both 10-byte and 9-byte payloads and forwards to Neptune.
-- **Root cause identified**: BlueZ hog-ll SET_REPORT initialization fails during HOG profile setup, preventing output report path from being established. Steam DOES schedule `CPulseHapticWorkItem` but the write is rejected at kernel level.
+- **Root cause identified**: On a clean connection (stale state cleared), BlueZ hog-ll never attempts SET_REPORT to configure output reports. Without SET_REPORT, the output report path is never established and haptic writes from Steam are rejected at kernel level. Steam DOES schedule `CPulseHapticWorkItem` but the write is rejected at kernel level.
 - **SET_SETTINGS notification hypothesis TESTED AND FAILED**: We tried sending 45-byte ack notifications on handle 0x0033 with zeroed button bytes after each SET_SETTINGS write. This caused ghost inputs (phantom button presses). The notification was reverted. The missing SET_SETTINGS notification is NOT the haptics blocker.
 - **Fresh btmon evidence (2026-06-28)**: Host sends only Write Requests (0x12) to handle 0x0024 every 3 seconds (SET_SETTINGS 0x87). Zero Write Commands (0x52) — host never sends haptic output reports. Zero ATT errors on the wire. Connection is clean.
-- **Two distinct BlueZ errors on current connection**:
+- **Two distinct BlueZ errors were from stale state**:
   - `set_report_cb() Error setting Report value: Request attribute has encountered an unlikely error` (ATT 0x0E)
   - `set_report_cb() bt_uhid_send: Invalid argument` (uhid layer)
-  These happen during HOG profile initialization, BEFORE any haptic writes.
+  These were from stale connection attempts before bond data was cleared. On a clean connection, SET_REPORT is never even attempted.
 - **What's known**:
   - Haptics use `SDL_hid_write()` (output reports, NOT feature reports). Report ID 0x80, 10 bytes.
   - Lizard mode must be OFF for haptics to work.
@@ -120,7 +120,7 @@ We present the **Steam Deck** as a **Steam Controller 2026 (SC2 / Triton)** over
 - **SET_SETTINGS 0x09 loop**: Steam retries every 3 seconds, never getting the notification response a real SC2 sends on 0x0033. This does NOT affect haptics — confirmed by testing.
 - **6 haptic report types**: 0x80 (rumble), 0x81 (pulse), 0x82 (command), 0x83 (LFO tone), 0x84 (log sweep), 0x85 (script). Only 0x80 is used by games via `SDL_RumbleJoystick()`.
 - **SC2 → Neptune translation**: Simple — `left_speed → left_intensity`, `right_speed → right_intensity`, period=0. Translation code already in `main_l2cap.py:281-289`. Neptune has dual ERM motors (basic rumble) vs SC2's dual LRA (precision haptics) — fidelity loss but functional for game rumble.
-- **`set_report_cb()` error**: BlueZ hog-ll tries SET_REPORT ~100 times/second and fails (487 errors in btmon). Without SET_REPORT success, the output report path is never established and haptic writes from Steam are rejected at kernel level. Two distinct errors observed: ATT 0x0E (unlikely error) and uhid Invalid argument.
+- **`set_report_cb()` error**: On a clean connection, BlueZ hog-ll never attempts SET_REPORT. Without SET_REPORT success, the output report path is never established and haptic writes from Steam are rejected at kernel level. Earlier "487 errors" and "unlikely error" (0x0E) messages in BlueZ logs were from stale connection attempts before bond data was cleared.
 - **What to try next**:
   1. Diagnose why hog-ll SET_REPORT fails — add logging to `_handle_write_cmd()` for all incoming Write Command (0x52) packets. **Key unknown**: whether SET_REPORT writes reach our ATT server or fail upstream in BlueZ.
   2. Get a real SC2 btmon capture to see if haptics work on a real device

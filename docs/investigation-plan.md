@@ -12,7 +12,7 @@ Every finding must cite specific evidence: a log line, a hex dump, a code refere
 - **Speculative** — Inference from limited evidence
 
 Bad: "SET_REPORT fails because the server doesn't handle Write Command."
-Good: "btmon shows 487 ATT Error Responses to Write Command (0x52) on handle 0x0019. The specific error code needs examination."
+Good: "On a clean connection (stale state cleared), btmon shows zero Write Command (0x52) packets. BlueZ hog-ll never attempts SET_REPORT."
 
 ### 2. Hypothesis Lifecycle
 
@@ -35,7 +35,7 @@ Deploy one change, capture results, evaluate. Don't add diagnostic logging AND f
 
 | Finding | Evidence | Confidence |
 |---------|----------|------------|
-| btmon shows SET_REPORT errors (ATT 0x0E + uhid Invalid argument) | `scratch/btmon_handshake.txt`, BlueZ logs | Confirmed |
+| On clean connection, SET_REPORT is never attempted | Fresh btmon capture (2026-06-28) shows zero Write Commands (0x52) | Confirmed |
 | btmon shows zero 0x52 packets for haptics | `scratch/btmon_handshake.txt` | Confirmed |
 | Host sends only Write Requests (0x12) to handle 0x0024 every 3s (SET_SETTINGS 0x87) | Fresh btmon capture (2026-06-28) | Confirmed |
 | Zero ATT errors on the wire — connection is clean | Fresh btmon capture (2026-06-28) | Confirmed |
@@ -44,15 +44,15 @@ Deploy one change, capture results, evaluate. Don't add diagnostic logging AND f
 | SET_SETTINGS notification hypothesis DISPROVEN | Test caused ghost inputs, reverted | Confirmed |
 | GATT metadata for haptic output is correct | `gatt_db.py`, `main_l2cap.py` | Confirmed |
 | `0x17252a0` is dead code (zero callers) | Multiple analysis methods agree | Confirmed |
-| Two distinct BlueZ errors during HOG init: ATT 0x0E + uhid Invalid argument | BlueZ logs | Confirmed |
+| Earlier "487 errors" and ATT 0x0E errors were from stale state | Fresh connection shows zero errors | Confirmed |
 
 ## What We Don't Know
 
 | Question | Current Best Guess | What Would Confirm/Refute |
 |----------|-------------------|--------------------------|
-| Why does SET_REPORT fail? | Two errors observed: ATT 0x0E (unlikely error) during ATT layer, uhid Invalid argument during uhid layer | Examine ATT error code precisely; check if SET_REPORT writes reach our ATT server or fail upstream in BlueZ |
+| Why doesn't hog-ll attempt SET_REPORT? | Unknown — may be Steam not recognizing haptic support, or some initialization step failing silently | Examine BlueZ hog-lib.c for SET_REPORT trigger conditions; check if capabilities bitmask matches Steam's expectations |
 | Do SET_REPORT writes reach our ATT server? | Unknown — they may fail in BlueZ before reaching L2CAP | Add diagnostic logging to `_handle_write_cmd()` to capture all incoming Write Command (0x52) packets |
-| What opcode does hog-ll use for haptics? | Probably Write Command (0x52) | Check BlueZ source or btmon of working device |
+| What opcode does hog-ll use for haptics? | Probably Write Command (0x52) — but zero observed on clean connection | Check BlueZ source or btmon of working device |
 | Does BlueZ require SET_REPORT before output works? | Yes (per HID spec) — confirmed by the fact that output reports fail without it | Check BlueZ source for SET_REPORT prerequisite logic |
 | Does SET_SETTINGS notification affect haptics? | **NO — disproven by test** | N/A — tested 2026-06-28, caused ghost inputs |
 
@@ -101,18 +101,15 @@ This tells us what the host is actually sending vs what we think it's sending.
 
 ### Step 4: Fix Based on Findings
 
-**If error code is "Insufficient Authentication" (0x05):**
-- The server may need to accept unencrypted writes for certain handles
-- Check if `BT_SECURITY_LOW` is set correctly
+**If SET_REPORT writes reach our ATT server:**
+- Examine the error code in the ATT Error Response
 - Check if the handle has write permissions in the GATT database
 
-**If error code is "Attribute Not Found" (0x0A):**
-- The handle might be wrong
-- Verify the handle map against `gatt_db.py`
-
-**If error code is "Write Not Permitted" (0x03):**
-- The handle's properties don't include write
-- Check the characteristic declaration in `gatt_db.py`
+**If SET_REPORT writes never reach our ATT server (hog-ll fails upstream):**
+- The issue is earlier in the BlueZ stack
+- Check BlueZ hog-lib.c for SET_REPORT trigger conditions
+- Check if the capabilities bitmask (0x4169bfff) matches what Steam expects
+- Check if some initialization step fails silently before SET_REPORT is attempted
 
 **If no 0x52 packets appear at all:**
 - hog-ll isn't sending them

@@ -70,11 +70,11 @@ Make a **Steam Deck** present itself as a **Steam Controller 2026 (SC2)** over *
 **✅ Working (End-to-End):**
 - Raw L2CAP ATT server accepts connections on CID 4.
 - MTU exchange succeeds (negotiated 517).
-- Service discovery succeeds (6 services, 82 attributes).
+- Service discovery succeeds (6 services, 85 attributes).
 - Characteristic/Descriptor discovery succeeds.
 - Host reads HID Information, Report Map, PnP ID, Battery Level.
 - PnP ID format corrected: Vendor ID Source set to USB-IF (0x02) with Valve's VID (0x28DE) and PID (0x1303).
-- Host writes CCCD to enable notifications on Report/Input (0x0012), Mouse (0x0019), Keyboard (0x001d), and SC2 Custom CHR_REPORT (0x0030).
+- Host writes CCCD to enable notifications on Report/Input (0x0012), Mouse (0x001c), Keyboard (0x0020), SC2 Custom CHR_REPORT (0x0033), and Battery (0x003c).
 - `/dev/hidrawN` created on host.
 - Host creates `/dev/input/eventN` for Mouse and Keyboard.
 - SMP pairing works (auto-confirm via Agent1 D-Bus interface).
@@ -92,7 +92,7 @@ Make a **Steam Deck** present itself as a **Steam Controller 2026 (SC2)** over *
 - **Haptic forwarding code ready** — `_on_haptic_write()` handler on handle 0x0019 correctly parses both 10-byte (with Report ID) and 9-byte (stripped) haptic payloads and forwards to Neptune. However, **the host never sends haptic output reports** — btmon capture confirmed zero ATT Write Command (0x52) packets. The issue is upstream in Steam/hog-ll.
 
 **❌ Not Working:**
-- **Haptics** — Host never sends haptic output reports (btmon confirmed zero 0x52 packets). Root cause: BlueZ hog-ll SET_REPORT initialization fails during HOG profile setup, preventing output report path from being established. Steam DOES schedule `CPulseHapticWorkItem` but the write is rejected at kernel level. The SET_SETTINGS notification hypothesis was **TESTED AND FAILED** — sending 45-byte ack notifications on handle 0x0033 caused ghost inputs and was reverted. The missing notification is NOT the haptics blocker. See `docs/findings-backlog.md` Haptics Deep Dive for details.
+- **Haptics** — Host never sends haptic output reports (btmon confirmed zero 0x52 packets). Root cause: BlueZ hog-ll never attempts SET_REPORT on a clean connection, so the output report path is never established and haptic writes from Steam are rejected at kernel level. Steam DOES schedule `CPulseHapticWorkItem` but the write is rejected at kernel level. The SET_SETTINGS notification hypothesis was **TESTED AND FAILED** — sending 45-byte ack notifications on handle 0x0033 caused ghost inputs and was reverted. The missing notification is NOT the haptics blocker. See `docs/findings-backlog.md` Haptics Deep Dive for details.
 
 **~~❌ Not Working (Both PRE-EXISTING)~~ — RESOLVED (2026-06-26):**
 - **~~Zombie disconnect~~** — Caused by stale BlueZ state, not code. After host PC reboot or clearing bond data + restarting BlueZ daemon, registration completes and input flows.
@@ -104,7 +104,7 @@ Make a **Steam Deck** present itself as a **Steam Controller 2026 (SC2)** over *
 ### What Needs to Happen Next
 
 1. **~~Fix SET_SETTINGS notification delivery~~** — **TESTED AND FAILED (2026-06-28)**. Sending 45-byte ack notifications on handle 0x0033 caused ghost inputs (phantom button presses). The notification was reverted. The missing SET_SETTINGS notification is NOT the haptics blocker — hypothesis disproven.
-2. **Diagnose why hog-ll SET_REPORT fails** — BlueZ hog-ll tries SET_REPORT ~100 times/second and fails (487 errors in btmon). Without SET_REPORT success, the output report path is never established and haptic writes are rejected at kernel level. Add diagnostic logging to `_handle_write_cmd()` to capture all incoming Write Command (0x52) packets. **Key unknown**: whether SET_REPORT writes reach our ATT server or fail upstream in BlueZ.
+2. **Diagnose why hog-ll never attempts SET_REPORT** — On a clean connection (stale state cleared), BlueZ hog-ll never tries to configure output reports via SET_REPORT. Without SET_REPORT, the output report path is never established and haptic writes are rejected at kernel level. Add diagnostic logging to `_handle_write_cmd()` to capture all incoming Write Command (0x52) packets. **Key unknown**: whether SET_REPORT writes reach our ATT server or fail upstream in BlueZ.
 3. **ATT Server Spec Compliance** — Implement one at a time, test each:
    - Read Blob error code (0x01 → 0x07)
    - MTU caps on Read/Notify PDUs
@@ -544,7 +544,7 @@ Sticks, triggers, trackpads, IMU — see `docs/sc2-protocol.md` for full format.
    - **IMPORTANT**: `btusb` kernel module reset (`sudo rmmod btusb && sudo modprobe btusb`) does NOT fix this — the stale state is in BlueZ user-space, not the kernel driver.
 10. **hog-ll strips Report ID from output reports** — When the host writes an output report (e.g., haptic 0x80) to `/dev/hidrawN`, hog-ll strips the Report ID byte before sending the ATT Write Command (0x52). The `_on_haptic_write()` handler must parse the 9-byte payload without the 0x80 prefix (type at [0], left speed at [3], right speed at [6]).
 11. **Cumulative BlueZ state corruption** — Repeated connection failures (e.g., from code bugs sending bad ATT responses) can poison BlueZ's HOG driver state. The driver may stop re-enabling CCCDs on subsequent connections, even after `bluetoothctl remove`. The only fix is clearing bond data + restarting the daemon, or a full reboot. This is why testing with a broken code version can break ALL subsequent tests until the state is cleared.
-12. **Haptics blocked by hog-ll SET_REPORT failure** — BlueZ hog-ll tries SET_REPORT ~100 times/second to configure output reports and fails (487 errors in btmon). Without SET_REPORT success, the output report path is never established and haptic writes from Steam are rejected at kernel level. Steam schedules `CPulseHapticWorkItem` but the write completes in 0.0ms (rejected). The SET_SETTINGS notification hypothesis was tested and disproven — sending ack notifications caused ghost inputs. See `docs/findings-backlog.md` for details.
+12. **Haptics blocked by hog-ll SET_REPORT failure** — On a clean connection (stale state cleared), BlueZ hog-ll never attempts SET_REPORT to configure output reports. Without SET_REPORT, the output report path is never established and haptic writes from Steam are rejected at kernel level. Steam schedules `CPulseHapticWorkItem` but the write completes in 0.0ms (rejected). The SET_SETTINGS notification hypothesis was tested and disproven — sending ack notifications caused ghost inputs. See `docs/findings-backlog.md` for details.
 
 ---
 
