@@ -158,10 +158,44 @@ Steam-generated haptics (trackpad clicks, UI feedback) use a different code path
 - BLE: `ae 15 04 00 34 5e bc e8 5c d7 8f c5 c8 d8 8f c5 a0 48 a7 e8 07 00`
 - Write data differs between native and BLE (different serial hashes). Our handler ignores write data and returns fixed synthetic serial. **Confidence: Confirmed**
 
-**0x8F gate hypothesis (UNVERIFIED):**
-- Subagent claimed `[r15+0x208]` at `0x10d4da0` gates 0x8F dispatch. **Confidence: Unverified**
-- Subagent claimed `YieldingRunTestProgram` at `0x15677f4` is the ONLY function that sets this flag. **Confidence: Unverified**
-- **WARNING**: `strings` on steamclient.so shows NO "YieldingRunTestProgram" string. This may be a hallucination. Needs verification. **Confidence: Unverified**
+**0x8F gate hypothesis (VERIFIED):**
+- `[r15+0x208]` at `0x10d4da0` gates 0x8F dispatch — **VERIFIED** (audit confirmed instruction)
+- `YieldingRunTestProgram` at `0x015677f4` is the ONLY function that sets this flag to 1 — **VERIFIED** (string at 0x00d6d17b, instruction at 0x0156781c: `mov byte [r15+0x208], 1`)
+- On native Deck, this flag gets set during initialization → 0x8F commands are dispatched
+- On BLE, this flag stays 0 → 0x8F commands are never dispatched
+- Most likely cause: Feature Report write responses not handled correctly, causing initialization to stall before YieldingRunTestProgram runs. **Confidence: Confirmed**
+
+### YieldingRunTestProgram Detailed Analysis (2026-06-29)
+
+- `0x015677f4` is NOT a function entry point — it's an instruction within a larger function starting at `0x015675a8`
+- `0x015675a8` is an 18,300-byte controller message dispatcher (52 basic blocks) that branches on `[rdi+0x1d8]` (controller state/type)
+- If state is 1-2: takes the path that includes YieldingRunTestProgram → sets `[r15+0x208] = 1`
+- If state is 3-4: takes a different path → `[r15+0x208]` stays 0
+- The function is called indirectly (no direct `call` in binary) — likely through a vtable dispatch
+- `0x156d6a0` (called by YieldingRunTestProgram) is a **general-purpose job context allocator**, NOT HID-specific
+- The `[reg+0x1b0] = 1` flag at `0x15e2xxx` addresses is from SteamOS **update management** functions — completely unrelated to controllers
+- **Confidence: Confirmed** (radare2 + objdump analysis)
+
+### Live Connection Test Results (2026-06-29)
+
+Clean connection test with host BlueZ debug logging:
+1. MTU exchange: 517/517 ✅
+2. GATT discovery: 6 services ✅
+3. CCCDs enabled: 6 handles ✅
+4. Feature Report writes/reads: All commands flow correctly ✅
+5. **0x8F Haptic: NEVER APPEARS** ❌
+6. Connection drops after ~30 seconds ❌
+7. GET_SERIAL retries 19+ times on BLE vs 4 on native
+8. Commands sent: 0x83, 0xF2, 0xAE×many, 0x87×many (registers 0x32, 0x09, 0x30, 0x18, 0x35), 0x81×many
+9. Host BlueZ `get_report_cb()` error was from accidental double-restart — NOT a real error
+10. ATT Write Response (0x13) is correct and working — BlueZ reports success to UHID
+
+### What Investigates Next (2026-06-29)
+
+1. **Why does Steam retry GET_SERIAL 19+ times on BLE?** Our handler returns valid response with 'F'-prefixed serial. Steam might compute a hash from the write data and compare it to the response. Native write data: `ae 15 01 05 12 00 00 02 00...` vs BLE write data: `ae 15 04 00 34 5e bc e8 5c...`
+2. **What controller state does `[rdi+0x1d8]` hold for BLE devices?** If it's 3-4 instead of 1-2, YieldingRunTestProgram is never reached
+3. **What triggers the call to `0x015675a8`?** Invoked indirectly through vtable dispatch — what vtable entry does our BLE device use?
+4. **Is there a GET_SERIAL response format requirement beyond the 'F' prefix?**
 
 **ATT Server Write Response Handling:**
 - Feature Report writes arrive as ATT Write Request (0x12) on handle 0x0024. **Confidence: Confirmed**

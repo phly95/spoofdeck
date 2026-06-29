@@ -137,22 +137,37 @@ Auto-Registering controller: F0000-0000-00000000, 12345678
 4. Starts retry timer
 5. Registers with controller system
 
-**Why it doesn't run on BLE:** The initialization sequence stalls before reaching `YieldingRunTestProgram`. The most likely cause: **Feature Report write responses are not handled correctly**, causing BlueZ's UHID layer to report failure back to Steam.
+**Why it doesn't run on BLE (UPDATED 2026-06-29):** The function at `0x015675a8` (18,300 bytes, 52 basic blocks) is a **controller message dispatcher** that branches on `[rdi+0x1d8]` (controller state/type). If state is 1-2, it takes the path that includes `YieldingRunTestProgram`. If state is 3-4, it takes a different path. On BLE, the controller state is different, so the `YieldingRunTestProgram` path is never taken.
 
-### Secondary Hypothesis: ATT Write Response Format
+**IMPORTANT CLARIFICATION:** The `[reg+0x1b0] = 1` flag found at `0x15e2xxx` addresses is from SteamOS **update management** functions (YieldingCheckForUpdateBIOS, YieldingCheckForUpdateOS, BYieldingRunAPIJob, etc.) — completely unrelated to controllers. The `0x156d6a0` function they call is a **general-purpose job context allocator**, not HID-specific.
 
-Our ATT server receives Feature Report writes (ATT Write Request 0x12 on handle 0x0024) and sends ATT Write Response. But we haven't verified:
-1. Does BlueZ's UHID layer expect a specific response format?
-2. Is our Write Response sent correctly?
-3. Does the UHID_SET_REPORT callback fire with success or error?
+### ATT Write Response Format (VERIFIED WORKING)
 
-If the callback fires with error, Steam might abort before reaching `YieldingRunTestProgram`.
+ATT Write Response (0x13) is correct — single byte, standard BLE spec. BlueZ's `set_report_cb()` receives status=0 and calls `bt_uhid_set_report_reply()` with success. **The Write Response path is NOT the problem.**
+
+### Evidence from Live Connection Test (2026-06-29)
+
+**Clean connection test results (host BlueZ debug + Deck ATT logs):**
+1. MTU exchange: 517/517 ✅
+2. GATT discovery: 6 services, all characteristics found ✅
+3. CCCDs enabled: 0x0012 (Gamepad), 0x001c (Mouse), 0x0020 (Keyboard), 0x0033 (SC2 Custom), 0x0037 (SC2 Custom 0x47), 0x0045 (Battery) ✅
+4. Feature Report writes/reads: All commands flow correctly ✅
+5. Commands sent: 0x83 GET_ATTRIBUTES, 0xF2 category query, 0xAE GET_SERIAL (19+ retries), 0x87 SET_SETTINGS (registers 0x32, 0x09, 0x30, 0x18, 0x35), 0x81 CLEAR_MAPPINGS (many)
+6. **0x8F Haptic: NEVER APPEARS** ❌
+7. Connection drops after ~30 seconds (supervision timeout) ❌
+
+**Key difference from native Deck:**
+- Native: GET_SERIAL succeeds after 4 retries → initialization proceeds → `YieldingRunTestProgram` runs → 0x8F dispatched
+- BLE: GET_SERIAL retries 19+ times → initialization stalls → `YieldingRunTestProgram` never runs → 0x8F never dispatched
+
+**Host BlueZ `get_report_cb()` error was from accidental double-restart of bluetoothd — NOT a real error.** The second clean connection had no errors.
 
 ### What to Investigate Next
 
-1. **Check ATT Write Response handling** — Verify our server sends correct ATT Write Response for Feature Report writes. Compare with what BlueZ's hog-lib.c expects.
-2. **Check BlueZ/UHID error paths** — If SET_REPORT fails, BlueZ logs an error. Check host BlueZ logs for errors during handshake.
-3. **Verify YieldingRunTestProgram is called** — Check if the function at `0x015677f4` runs on BLE. If not, find what prevents it.
+1. **Why does Steam retry GET_SERIAL 19+ times on BLE?** Our handler returns valid response with 'F'-prefixed serial. Is Steam checking the write data hash? The native Deck write data has `01 05 12 00 00 02` at bytes 2-7, while BLE has `04 00 34 5e bc e8`. Steam might compute a hash from the write data and compare it to the response.
+2. **What controller state does `[rdi+0x1d8]` hold for BLE devices?** If it's 3-4 instead of 1-2, `YieldingRunTestProgram` is never reached. This is a controller type/state field set during device initialization.
+3. **What triggers the call to `0x015675a8`?** It's invoked indirectly (no direct `call` in binary) — likely through a vtable dispatch set up during controller registration. What vtable entry does our BLE device use?
+4. **Is there a GET_SERIAL response format requirement beyond the 'F' prefix?** Maybe Steam expects a specific response structure that our synthetic response doesn't match.
 
 ## Important Rules
 
