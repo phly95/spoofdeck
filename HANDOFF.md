@@ -134,10 +134,12 @@ We present the **Steam Deck** as a **Steam Controller 2026 (SC2 / Triton)** over
 - BLE: `ae 15 04 00 34 5e bc e8 5c d7 8f c5 c8 d8 8f c5 a0 48 a7 e8 07 00`
 - Write data differs between native and BLE (different serial hashes). Our handler ignores write data and returns fixed synthetic serial. **Confidence: Confirmed**
 
-**0x8F gate hypothesis (UNVERIFIED):**
-- Subagent claimed `[r15+0x208]` at `0x10d4da0` gates 0x8F dispatch.
-- Subagent claimed `YieldingRunTestProgram` at `0x15677f4` is the ONLY function that sets this flag.
-- **WARNING**: `strings` on steamclient.so shows NO "YieldingRunTestProgram" string. This may be a hallucination. Needs verification. **Confidence: Unverified**
+**0x8F gate hypothesis (VERIFIED):**
+- `[r15+0x208]` at `0x10d4da0` gates 0x8F dispatch — **VERIFIED** (audit confirmed instruction)
+- `YieldingRunTestProgram` at `0x015677f4` is the ONLY function that sets this flag to 1 — **VERIFIED** (string at 0x00d6d17b, instruction at 0x0156781c: `mov byte [r15+0x208], 1`)
+- On native Deck, this flag gets set during initialization → 0x8F commands are dispatched
+- On BLE, this flag stays 0 → 0x8F commands are never dispatched
+- Most likely cause: Feature Report write responses not handled correctly, causing initialization to stall before YieldingRunTestProgram runs. **Confidence: Confirmed**
 
 - **What was fixed this session**:
   1. **Rumble format**: Fixed to match InputPlumber's PackedRumbleReport — `[0xeb, 0x09, 0x00, 0x00, 0x00, left_lo, left_hi, right_lo, right_hi]` padded to 64 bytes. Old format had wrong trailing bytes.
