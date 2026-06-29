@@ -57,10 +57,10 @@ HIDAPI_DriverSteamTriton_UpdateDevice() [every 6ms]:
 ```
 
 ### Why Haptics Don't Work
-1. **hog-ll SET_REPORT initialization fails** — BlueZ tries SET_REPORT ~100 times/second (487 errors in btmon). Without SET_REPORT success, the output report path is never established and haptic writes from Steam are rejected at kernel level. Steam schedules `CPulseHapticWorkItem` but the write completes in 0.0ms (rejected).
-2. **SET_SETTINGS 0x09 notification not delivered** — Real SC2 sends notification `[0x87, 0x01, register, 0x00 × 61]` on handle 0x0033 after each SET_SETTINGS write. Our code intentionally skips this (to avoid phantom button presses). Steam retries every ~3 seconds, never completing the state machine.
-3. **`0x17252a0` is dead code** — The haptic trigger function at 0x17252a0 has ZERO callers in steamclient.so. The checks inside it (+0x320, +0x308) are downstream and irrelevant to the current blocking.
-4. **`SDL.joystick.cap.rumble` is NOT the blocker** — Steam schedules haptics despite this hint. The capability gates bit 14 (0x4000) in the capability bitmask, but Steam is already trying to send haptics.
+1. **hog-ll SET_REPORT initialization fails** — BlueZ tries SET_REPORT ~100 times/second (487 errors in btmon). Without SET_REPORT success, the output report path is never established and haptic writes from Steam are rejected at kernel level. Steam schedules `CPulseHapticWorkItem` but the write completes in 0.0ms (rejected). Two distinct errors observed: ATT 0x0E (unlikely error) and uhid Invalid argument. **Confidence: Confirmed** — btmon and BlueZ logs both confirm.
+2. **~~SET_SETTINGS 0x09 notification not delivered~~** — **TESTED AND FAILED (2026-06-28)**. We tried sending 45-byte ack notifications on handle 0x0033 with zeroed button bytes. This caused ghost inputs (phantom button presses). The notification was reverted. The missing SET_SETTINGS notification is NOT the haptics blocker. **Confidence: Disproven** — direct test with counter-evidence.
+3. **`0x17252a0` is dead code** — The haptic trigger function at 0x17252a0 has ZERO callers in steamclient.so. The checks inside it (+0x320, +0x308) are downstream and irrelevant to the current blocking. **Confidence: Confirmed** — multiple analysis methods agree.
+4. **`SDL.joystick.cap.rumble` is NOT the blocker** — Steam schedules haptics despite this hint. The capability gates bit 14 (0x4000) in the capability bitmask, but Steam is already trying to send haptics. **Confidence: Confirmed** — Steam logs show CPulseHapticWorkItem creation.
 
 ### Neptune vs SC2 Haptic Format
 - **SC2**: Dual LRA motors, 6 output report types (0x80-0x85)
@@ -86,13 +86,13 @@ HIDAPI_DriverSteamTriton_UpdateDevice() [every 6ms]:
 - Changing SET_SETTINGS 0x09 response format (3 formats tried) — none broke the loop
 - Adding `BT_SECURITY_MEDIUM` on listening socket — error 0x0C persisted
 - Deferred notification ordering — did NOT fix the issue
+- **SET_SETTINGS notification delivery (2026-06-28)** — Sent 45-byte ack notifications on handle 0x0033 with zeroed button bytes. Caused ghost inputs (phantom button presses). Notification reverted. Hypothesis disproven.
 
 ### What Hasn't Been Tried
 - Real SC2 btmon capture — would answer all remaining questions in minutes
 - Writing directly to `/dev/hidrawN` on host — would test if forwarding path works
 - Investigating specific controller state/register values needed for haptics
-- **Fix SET_SETTINGS notification delivery** — send echo response on CHR_REPORT handle 0x0033 after each SET_SETTINGS write. This matches what a real SC2 does and may unblock Steam's state machine.
-- **Diagnose why hog-ll SET_REPORT fails** — add logging to `_handle_write_cmd()` for all incoming Write Command (0x52) packets.
+- **Diagnose why hog-ll SET_REPORT fails** — add logging to `_handle_write_cmd()` for all incoming Write Command (0x52) packets. **Key unknown**: whether SET_REPORT writes reach our ATT server or fail upstream in BlueZ.
 
 ### SC2 → Neptune Haptic Translation
 

@@ -206,7 +206,7 @@ class AttServer:
     def _handle_pdu(self, data):
         """Parse ATT opcode and dispatch to handler."""
         opcode = data[0]
-        print(f"[att] PDU recv: opcode=0x{opcode:02x} len={len(data)} data={data[:20].hex()}")
+        print(f"[att] PDU recv: opcode=0x{opcode:02x} len={len(data)} data={data.hex()}")
 
         if opcode == ATT_OP_MTU_REQ:
             self._handle_mtu_req(data)

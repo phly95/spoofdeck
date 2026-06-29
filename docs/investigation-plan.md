@@ -35,21 +35,26 @@ Deploy one change, capture results, evaluate. Don't add diagnostic logging AND f
 
 | Finding | Evidence | Confidence |
 |---------|----------|------------|
-| btmon shows SET_REPORT errors | `scratch/btmon_handshake.txt` | Confirmed |
+| btmon shows SET_REPORT errors (ATT 0x0E + uhid Invalid argument) | `scratch/btmon_handshake.txt`, BlueZ logs | Confirmed |
 | btmon shows zero 0x52 packets for haptics | `scratch/btmon_handshake.txt` | Confirmed |
+| Host sends only Write Requests (0x12) to handle 0x0024 every 3s (SET_SETTINGS 0x87) | Fresh btmon capture (2026-06-28) | Confirmed |
+| Zero ATT errors on the wire — connection is clean | Fresh btmon capture (2026-06-28) | Confirmed |
 | Steam schedules haptics but writes fail in 0.0ms | Steam log files | Confirmed |
 | Our code skips SET_SETTINGS notification | `main_l2cap.py:522-525` (comment) | Confirmed |
+| SET_SETTINGS notification hypothesis DISPROVEN | Test caused ghost inputs, reverted | Confirmed |
 | GATT metadata for haptic output is correct | `gatt_db.py`, `main_l2cap.py` | Confirmed |
 | `0x17252a0` is dead code (zero callers) | Multiple analysis methods agree | Confirmed |
+| Two distinct BlueZ errors during HOG init: ATT 0x0E + uhid Invalid argument | BlueZ logs | Confirmed |
 
 ## What We Don't Know
 
 | Question | Current Best Guess | What Would Confirm/Refute |
 |----------|-------------------|--------------------------|
-| Why does SET_REPORT fail? | Maybe auth issue | Examine error code in btmon |
-| Does missing notification affect haptics? | Unclear | Send notification, check if errors decrease |
+| Why does SET_REPORT fail? | Two errors observed: ATT 0x0E (unlikely error) during ATT layer, uhid Invalid argument during uhid layer | Examine ATT error code precisely; check if SET_REPORT writes reach our ATT server or fail upstream in BlueZ |
+| Do SET_REPORT writes reach our ATT server? | Unknown — they may fail in BlueZ before reaching L2CAP | Add diagnostic logging to `_handle_write_cmd()` to capture all incoming Write Command (0x52) packets |
 | What opcode does hog-ll use for haptics? | Probably Write Command (0x52) | Check BlueZ source or btmon of working device |
-| Does BlueZ require SET_REPORT before output works? | Probably (per HID spec) | Check BlueZ source |
+| Does BlueZ require SET_REPORT before output works? | Yes (per HID spec) — confirmed by the fact that output reports fail without it | Check BlueZ source for SET_REPORT prerequisite logic |
+| Does SET_SETTINGS notification affect haptics? | **NO — disproven by test** | N/A — tested 2026-06-28, caused ghost inputs |
 
 ---
 
@@ -114,20 +119,11 @@ This tells us what the host is actually sending vs what we think it's sending.
 - The issue is earlier in the BlueZ stack
 - Check if SET_REPORT succeeds first (it might be a prerequisite)
 
-### Step 5: If Step 4 Fix Works — Add SET_SETTINGS Notification
+### Step 5: ~~If Step 4 Fix Works — Add SET_SETTINGS Notification~~ DISPROVEN
 
-Only AFTER the basic write path works, add the notification:
-```python
-# In _handle_sc2_command, after SC2_CMD_SET_ATTRIBUTES handler:
-if self.att_server and self._sc2_hid_handle:
-    notification = bytearray([0x87, 0x01, register]) + bytearray(61)
-    self.att_server.send_notification(self._sc2_hid_handle, bytes(notification))
-```
+The SET_SETTINGS notification hypothesis was tested on 2026-06-28 and **failed**. Sending 45-byte ack notifications on handle 0x0033 caused ghost inputs (phantom button presses). The notification was reverted. This step is no longer applicable.
 
-This is listed separately because:
-- It might not be the root cause
-- Sending it before the write path works won't help
-- We need to verify it doesn't cause phantom button presses
+**Updated priority**: After fixing the basic write path (Step 4), focus on diagnosing why SET_REPORT fails — whether the writes reach our ATT server or fail upstream in BlueZ.
 
 ### Step 6: Verify End-to-End
 
