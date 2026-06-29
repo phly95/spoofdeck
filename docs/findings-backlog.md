@@ -192,10 +192,18 @@ Clean connection test with host BlueZ debug logging:
 
 ### What Investigates Next (2026-06-29)
 
+**LD_PRELOAD patch for 0x8F gate (RECOMMENDED):**
+- Patch `je 0x10d4fd0` at `0x10d4da6` to `nop nop` at runtime via `LD_PRELOAD`
+- Forces 0x8F dispatch regardless of `[r15+0x208]` gate
+- 55-65% probability of working
+- If crashes: GDB watchpoint on `[r15+0x208]` reveals what gate controls
+- If works: Steam haptics (trackpad clicks, UI feedback) will flow to Neptune motors
+- **Confidence: Speculative (hasn't been tested yet, but grounded in verified root cause)**
+
+**Other open questions:**
 1. **Why does Steam retry GET_SERIAL 19+ times on BLE?** Our handler returns valid response with 'F'-prefixed serial. Steam might compute a hash from the write data and compare it to the response. Native write data: `ae 15 01 05 12 00 00 02 00...` vs BLE write data: `ae 15 04 00 34 5e bc e8 5c...`
 2. **What controller state does `[rdi+0x1d8]` hold for BLE devices?** If it's 3-4 instead of 1-2, YieldingRunTestProgram is never reached
 3. **What triggers the call to `0x015675a8`?** Invoked indirectly through vtable dispatch — what vtable entry does our BLE device use?
-4. **Is there a GET_SERIAL response format requirement beyond the 'F' prefix?**
 
 **ATT Server Write Response Handling:**
 - Feature Report writes arrive as ATT Write Request (0x12) on handle 0x0024. **Confidence: Confirmed**

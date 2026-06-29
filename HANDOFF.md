@@ -99,7 +99,13 @@ We present the **Steam Deck** as a **Steam Controller 2026 (SC2 / Triton)** over
 ### 2. ~~Fix Encryption Error~~ RESOLVED (2026-06-26)
 - **Status**: Cleared after host PC reboot. Same root cause as zombie disconnect — stale BlueZ state.
 
-### 3. Haptics
+### 3. LD_PRELOAD Patch for Steam Haptics (RECOMMENDED NEXT STEP)
+- **Status**: Root cause fully verified. `[r15+0x208]` at `0x10d4da0` stays 0 on BLE, gate skips 0x8F dispatch. The only setter is `YieldingRunTestProgram` at `0x0156781c`, reached through a controller message dispatcher at `0x015675a8` that branches on `[rdi+0x1d8]` (controller state/type). On BLE, state is 3-4 instead of 1-2, so the path is never taken.
+- **Recommended approach**: Write a C library loaded via `LD_PRELOAD` that patches `je 0x10d4fd0` at `0x10d4da6` to `nop nop`, forcing 0x8F dispatch regardless of the gate.
+- **Probability**: 55-65% of working. If crashes, GDB watchpoint reveals what gate controls.
+- **Evidence**: Native Deck strace shows 16× 0x8F in 124 HIDIOCSFEATURE calls. BLE shows 0× 0x8F. Connection drops after ~30s. ATT Write Response correct. GET_SERIAL retries 19+ times on BLE vs 4 on native. Controller IS registered.
+
+### 4. Haptics — In-Game Rumble Works, Steam Haptics Do Not
 
 #### In-Game Rumble: WORKS
 - **Status**: Full haptic pipeline confirmed end-to-end. Games that call `SDL_RumbleJoystick()` produce rumble on the Neptune motors.
@@ -109,46 +115,11 @@ We present the **Steam Deck** as a **Steam Controller 2026 (SC2 / Triton)** over
 
 #### Steam-Generated Haptics: DO NOT WORK
 - **Status**: Trackpad clicks, UI feedback haptics, and other Steam-internal haptic events do NOT produce rumble.
-- **Root cause**: These come from Steam's own haptic system, not from `SDL_RumbleJoystick()`. The Steam haptic path uses a different code path that does not reach the Neptune motors. Only games that explicitly call `SDL_RumbleJoystick()` produce rumble.
+- **Root cause**: 0x8F never appears on BLE because `[r15+0x208]` gate stays 0. See section 3 above for full analysis.
 - **Known dead end**: `0x17252a0` (haptic trigger function in steamclient.so) has ZERO callers — confirmed dead code.
+- **SET_SETTINGS notification hypothesis DISPROVEN**: Sending 45-byte ack notifications on handle 0x0033 caused ghost inputs (2026-06-28). Reverted.
 
-#### Native Deck vs BLE Haptics Comparison (2026-06-29)
-
-**Native Deck (HIDIOCSFEATURE capture):**
-- Steam sends 124 HIDIOCSFEATURE calls in 35 seconds during initialization.
-- Command breakdown: 0x87 SET_SETTINGS (61), 0x81 ClearDigitalMappings (38), **0x8F Haptic (16)**, 0xAE GET_SERIAL (4), 0x83 GET_ATTRIBUTES (2), 0xC1/0xDC/0xE2 (1 each).
-- **0x8F (haptic feedback) appears 16 times on native but NEVER on BLE.** **Confidence: Confirmed**
-- 0x8F appears during initialization (positions 9,10 right after SET_SETTINGS) and during steady state.
-- All commands go through HIDIOCSFEATURE (SET_FEATURE), NOT write() (output report).
-- Initial handshake sequence: 0x83 → 0xAE → 0xAE → 0x81 → 0x87×4 → 0x8F×2 → 0x81 → 0x87 → ...
-
-**BLE Handshake:**
-- Steam DOES send the full command suite on BLE: 0x87×55, 0x81×8, 0xAE×19 (retrying), 0x83×1, 0xC1/0xDC/0xE2/0xF2×1. **Confidence: Confirmed**
-- GET_SERIAL retries 19 times on BLE vs 4 on native. **Confidence: Confirmed**
-- SET_SETTINGS 0x09 retries every 3 seconds on BLE. **Confidence: Confirmed**
-- **Controller IS registered** (controller_ui.txt shows "Auto-Registering controller: F0000-0000-00000000, 12345678"). **Confidence: Confirmed**
-- "Skipping usage report" is normal behavior (happens on both native and BLE). **Confidence: Confirmed**
-
-**Native vs BLE GET_SERIAL write data differs:**
-- Native: `ae 15 01 05 12 00 00 02 00 00 00 00 0a 2b 12 a9 62 04 3c b0 c6 69`
-- BLE: `ae 15 04 00 34 5e bc e8 5c d7 8f c5 c8 d8 8f c5 a0 48 a7 e8 07 00`
-- Write data differs between native and BLE (different serial hashes). Our handler ignores write data and returns fixed synthetic serial. **Confidence: Confirmed**
-
-**0x8F gate hypothesis (VERIFIED):**
-- `[r15+0x208]` at `0x10d4da0` gates 0x8F dispatch — **VERIFIED** (audit confirmed instruction)
-- `YieldingRunTestProgram` at `0x015677f4` is the ONLY function that sets this flag to 1 — **VERIFIED** (string at 0x00d6d17b, instruction at 0x0156781c: `mov byte [r15+0x208], 1`)
-- On native Deck, this flag gets set during initialization → 0x8F commands are dispatched
-- On BLE, this flag stays 0 → 0x8F commands are never dispatched
-- Most likely cause: Feature Report write responses not handled correctly, causing initialization to stall before YieldingRunTestProgram runs. **Confidence: Confirmed**
-
-- **What was fixed this session**:
-  1. **Rumble format**: Fixed to match InputPlumber's PackedRumbleReport — `[0xeb, 0x09, 0x00, 0x00, 0x00, left_lo, left_hi, right_lo, right_hi]` padded to 64 bytes. Old format had wrong trailing bytes.
-  2. **Lizard mode commands**: NEPTUNE_LIZARD_OFF_CMDS had wrong Report ID prefix (`0x01 0x00` instead of direct `0x81`). InputPlumber analysis revealed the correct format.
-  3. **EVIOCGRAB**: Grabs event4/event5 at startup to prevent lizard mode evdev events from reaching KDE desktop.
-  4. **BlueZ hog-lib.c analysis**: Confirmed `forward_report()` uses ATT Write Request (0x12), not Write Command (0x52). Previous btmon filters for 0x52 missed actual writes.
-  5. **Manual write test**: Writing directly to `/dev/hidrawN` on host confirmed the UHID output path works end-to-end.
-
-### 4. ATT Server Spec Compliance (LOW PRIORITY)
+### 5. ATT Server Spec Compliance (LOW PRIORITY)
 - **Status**: Registration works without these fixes. These are correctness improvements that could prevent issues with different host stacks or future BlueZ versions.
 - **Items (implement one at a time, test each)**:
   1. **Read Blob error code** (`att_server.py:379`) — Returns `ATT_ERR_INVALID_HANDLE` (0x01) when offset >= value length. Should be `ATT_ERR_INVALID_OFFSET` (0x07).
@@ -157,18 +128,18 @@ We present the **Steam Deck** as a **Steam Controller 2026 (SC2 / Triton)** over
   4. **ATT permission checking** — No `ATT_PROP_READ`/`ATT_PROP_WRITE` flag checking on Read/Write Request handlers. **DO NOT check permissions on Write Command** — Feature Report 0x00 has `ATT_PROP_WRITE` but not `ATT_PROP_WRITE_NO_RSP`.
   5. **Diagnostic handle labels** (`att_server.py:504-510, 525-531`) — Stale hardcoded handles for Mouse, Keyboard, SC2 Custom CH1/CH2. Only Gamepad (0x0012) is correct.
 
-### 5. SC2 Custom Reports (0x003c) — CCCD Not Always Enabled (MEDIUM PRIORITY)
+### 6. SC2 Custom Reports (0x003c) — CCCD Not Always Enabled (MEDIUM PRIORITY)
 - **Status**: CCCD on handle 0x003c not always written by BlueZ hog-ll after reconnect. Host sees generic gamepad instead of full SC2. Trackpads, gyro, and back buttons still work (data flows on 0x0033).
 - **What to try**:
   1. Investigate why hog-ll sometimes skips 0x003c CCCD write
   2. Check if dual notification targets (Valve Custom Service + HID Service CHR_REPORT) cause confusion
   3. Compare btmon captures between successful and failed CCCD enables
 
-### 5. Command Routing (MEDIUM PRIORITY)
+### 7. Command Routing (MEDIUM PRIORITY)
 - **Status**: 0x85/0x8D swapped. Per protocol doc, 0x85 = SET_DEFAULT_DIGITAL_MAPPINGS, 0x8D = SET_CONTROLLER_MODE. Code has them reversed.
 - **Fix**: Swap the routing in `main_l2cap.py:556-564`.
 
-### 3. GET_SERIAL Format (FIXED)
+### 8. GET_SERIAL Format (FIXED)
 - **Status**: FIXED in current commit. byte[1] changed from 0x14 to 0x15 (matches write command). Serial must start with 'F' (0x46) to pass V_strncmp validation at 0x26b1ac0.
 - **Validation**: `V_strncmp` at 0x26b1ac0 compares first byte of serial against pattern at 0xd69c60 (first byte = 0x46 = 'F'). If validation fails, serial is replaced with "DOCKED_SLOT".
 - **Response format** (23 bytes):
@@ -179,25 +150,17 @@ We present the **Steam Deck** as a **Steam Controller 2026 (SC2 / Triton)** over
   bytes[3-22] = serial number (20 bytes, starts with 'F')
   ```
 
-### 6. Haptic Feedback — In-Game Rumble Works, Steam Haptics Do Not
-
-- **In-game rumble works**: Full pipeline confirmed with Celeste. Games calling `SDL_RumbleJoystick()` produce rumble. See section 3 above for full pipeline details.
-- **Steam-generated haptics do not work**: Trackpad clicks, UI feedback haptics use a different code path. See section 3 above.
-- **BlueZ hog-lib.c analysis (2026-06-29)**: The haptics path is `UHID_OUTPUT` -> `forward_report()` using ATT Write Request (0x12), NOT Write Command (0x52). Our CHR_REPORT has `GATT_CHR_PROP_WRITE` which causes `forward_report()` to use `gatt_write_char()` (0x12) instead of `gatt_write_cmd()` (0x52).
-- **SET_SETTINGS notification hypothesis TESTED AND FAILED**: Sending 45-byte ack notifications on handle 0x0033 caused ghost inputs. The missing notification is NOT the haptics blocker.
-- **Note**: The SET_SETTINGS 0x09 retry loop is confirmed to be noise (not a blocker). It does not affect haptics.
-
-### 7. Dual Trackpads & IMU (Gyro/Accel) Forwarding
+### 9. Dual Trackpads & IMU (Gyro/Accel) Forwarding
 - **Status**: 45-byte SC2 Custom report with trackpad X/Y, IMU (accel/gyro), and force sensors is **already implemented** in `input_handler.py`. The data flows correctly from Neptune HID → SC2 report.
 - **Remaining**: Steam may need specific settings enabled to activate gyro/trackpad features (registers 0x27 IMU_MODE, etc.). CCCDs on 0x003c must be enabled first.
 
-### 8. Auto-Reconnect Daemon
+### 10. Auto-Reconnect Daemon
 - **Status**: Advertising refresh on disconnect is **already implemented** in `main_l2cap.py:_schedule_adv_refresh()`.
 - **Remaining**: Ensure clean re-advertising after disconnects without manual intervention.
 - **Key commands in the SC2 protocol flow**:
   1. `0x83` GET_ATTRIBUTES → response: `[0x83, 0x2D, 9 attributes x 5 bytes, padding]`
   2. `0xF2` Unknown (1-byte payload varies: 0x01, 0x02, etc.) → response: `[0xF2, 0x00, zeros]` (STILL WRONG — needs real SC2 capture)
-  3. `0xAE` GET_SERIAL → response: `[0xAE, 0x14, 0x01, serial_ascii, padding]`
+  3. `0xAE` GET_SERIAL → response: `[0xAE, 0x15, 0x01, serial_ascii, padding]`
   4. `0xBA` GET_CHIP_ID → response: `[0xBA, 0x11, 0x00, 15-byte chip_id, padding]`
   5. `0x87` SET_SETTINGS → write-only (configures registers), verification read NEVER happens (by design — SDL3 confirms fire-and-forget)
   6. `0x89` GET_SETTINGS_VALUES → response: stored register values
@@ -206,7 +169,7 @@ We present the **Steam Deck** as a **Steam Controller 2026 (SC2 / Triton)** over
   9. `0x85` SET_DEFAULT_DIGITAL_MAPPINGS → write-only (enters gamepad mode)
   10. `0x8D` SET_CONTROLLER_MODE → mode switch (lizard ↔ Steam Input)
 
-### 7. Reverse Engineering Findings (from steamclient.so)
+### 11. Reverse Engineering Findings (from steamclient.so)
 - **ControllerDetails_tE**: 84 bytes (0x54), ready_flag at offset 0x3c must be 1. Set by QueueFetchingControllerDetails at 0x01092820. Fields come from controller object offsets 0x84-0xd4.
 - **Product ID check**: 0x1303 is in recognized range (0x1302-0x1305). Other recognized types: 0x1142, 0x1220, 0x1201-0x1206, 0x1101-0x1102.
 - **Haptic path**: Uses SDL_hid_write() (output reports), NOT SDL_hid_send_feature_report(). Report ID 0x80, 10 bytes. Lizard mode must be OFF for haptics to work. In-game rumble via SDL_RumbleJoystick() works end-to-end. Steam-generated haptics (trackpad clicks, UI feedback) do not reach Neptune motors.

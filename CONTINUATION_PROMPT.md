@@ -33,7 +33,7 @@ Source `pii.env` for credentials before scripts.
 - Controller IS registered on host — serial "F0000-0000-00000000" accepted, configs loaded
 
 ### Not Working
-- **Steam-generated haptics** — Trackpad clicks, UI feedback haptics do NOT produce rumble. These come from Steam's internal haptic system, not from `SDL_RumbleJoystick()`.
+- **Steam-generated haptics** — Trackpad clicks, UI feedback haptics do NOT produce rumble. 0x8F never appears on BLE. Root cause verified: `[r15+0x208]` at `0x10d4da0` stays 0, gate skips 0x8F dispatch.
 
 ### What Was Fixed (2026-06-29)
 1. **Rumble format** — Fixed to match InputPlumber's PackedRumbleReport: `[0xeb, 0x09, 0x00, 0x00, 0x00, left_lo, left_hi, right_lo, right_hi]` padded to 64 bytes
@@ -164,10 +164,10 @@ ATT Write Response (0x13) is correct — single byte, standard BLE spec. BlueZ's
 
 ### What to Investigate Next
 
-1. **Why does Steam retry GET_SERIAL 19+ times on BLE?** Our handler returns valid response with 'F'-prefixed serial. Is Steam checking the write data hash? The native Deck write data has `01 05 12 00 00 02` at bytes 2-7, while BLE has `04 00 34 5e bc e8`. Steam might compute a hash from the write data and compare it to the response.
-2. **What controller state does `[rdi+0x1d8]` hold for BLE devices?** If it's 3-4 instead of 1-2, `YieldingRunTestProgram` is never reached. This is a controller type/state field set during device initialization.
-3. **What triggers the call to `0x015675a8`?** It's invoked indirectly (no direct `call` in binary) — likely through a vtable dispatch set up during controller registration. What vtable entry does our BLE device use?
-4. **Is there a GET_SERIAL response format requirement beyond the 'F' prefix?** Maybe Steam expects a specific response structure that our synthetic response doesn't match.
+1. **LD_PRELOAD patch for 0x8F gate (RECOMMENDED)** — Patch `je 0x10d4fd0` at `0x10d4da6` to `nop nop` at runtime. This forces 0x8F dispatch regardless of `[r15+0x208]` gate. 55-65% probability of working. If it crashes, GDB watchpoint reveals what gate controls. If it works, Steam haptics (trackpad clicks, UI feedback) will flow to Neptune motors.
+2. **Why does Steam retry GET_SERIAL 19+ times on BLE?** Our handler returns valid response with 'F'-prefixed serial. Is Steam checking the write data hash? The native Deck write data has `01 05 12 00 00 02` at bytes 2-7, while BLE has `04 00 34 5e bc e8`. Steam might compute a hash from the write data and compare it to the response.
+3. **What controller state does `[rdi+0x1d8]` hold for BLE devices?** If it's 3-4 instead of 1-2, `YieldingRunTestProgram` is never reached. This is a controller type/state field set during device initialization.
+4. **What triggers the call to `0x015675a8`?** It's invoked indirectly (no direct `call` in binary) — likely through a vtable dispatch set up during controller registration. What vtable entry does our BLE device use?
 
 ## Important Rules
 

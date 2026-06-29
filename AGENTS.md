@@ -104,22 +104,13 @@ Make a **Steam Deck** present itself as a **Steam Controller 2026 (SC2)** over *
 
 ### What Needs to Happen Next
 
-1. **Investigate Steam-generated haptics** — Trackpad clicks and UI feedback haptics do NOT produce rumble. These come from Steam's internal haptic system, not from `SDL_RumbleJoystick()`. The Steam haptic path uses a different code path that does not reach the Neptune motors. Only games that call `SDL_RumbleJoystick()` produce rumble.
-2. **Steam Haptics Investigation (2026-06-29)** — See `docs/findings-backlog.md` for full details. Key findings:
-   - **Native Deck (HIDIOCSFEATURE capture)**: Steam sends 124 HIDIOCSFEATURE calls in 35 seconds during initialization. 0x8F (haptic feedback) appears 16 times on native but NEVER on BLE. **Confidence: Confirmed**
-   - **BLE handshake**: Steam DOES send the full command suite on BLE (0x87x55, 0x81x8, 0xAEx19, 0x83x1, 0xC1/0xDC/0xE2/0xF2x1). GET_SERIAL retries 19 times on BLE vs 4 on native. **Confidence: Confirmed**
-   - **0x8F gate (VERIFIED)**: `[r15+0x208]` at `0x10d4da0` gates 0x8F dispatch — `YieldingRunTestProgram` at `0x015677f4` is the ONLY function that sets this flag to 1 (string at 0x00d6d17b, instruction at 0x0156781c: `mov byte [r15+0x208], 1`). On native Deck, flag gets set during init → 0x8F dispatched. On BLE, flag stays 0 → 0x8F never dispatched. **Confidence: Confirmed**
-   - **YieldingRunTestProgram detailed analysis**: `0x015677f4` is an instruction within `0x015675a8` (18,300-byte controller message dispatcher). Branches on `[rdi+0x1d8]` (controller state/type). State 1-2 → YieldingRunTestProgram path. State 3-4 → different path. Called indirectly via vtable. `0x156d6a0` is a general-purpose job allocator, NOT HID-specific. `[reg+0x1b0] = 1` at `0x15e2xxx` is SteamOS update management — unrelated. **Confidence: Confirmed**
-   - **Live connection test (2026-06-29)**: Clean connection, all commands flow, 0x8F never appears, GET_SERIAL retries 19+ times, connection drops after ~30s. ATT Write Response (0x13) is correct — BlueZ reports success. **Confidence: Confirmed**
-   - **Controller IS registered**: serial "F0000-0000-00000000" IS accepted by Steam. "Skipping usage report" is normal behavior (happens on both native and BLE). **Confidence: Confirmed**
-   - **Native vs BLE GET_SERIAL write data differs**: Native: `ae 15 01 05 12 00 00 02 00 00 00 00 0a 2b 12 a9 62 04 3c b0 c6 69`. BLE: `ae 15 04 00 34 5e bc e8 5c d7 8f c5 c8 d8 8f c5 a0 48 a7 e8 07 00`. Our handler ignores write data and returns fixed synthetic serial. **Confidence: Confirmed**
-3. **ATT Server Spec Compliance** — Implement one at a time, test each:
+1. **LD_PRELOAD patch for 0x8F gate (RECOMMENDED)** — The verified root cause of missing Steam haptics is that `[r15+0x208]` at `0x10d4da0` stays 0 on BLE, so the 0x8F dispatch is skipped. The only setter is `YieldingRunTestProgram` at `0x0156781c` (`mov byte [r15+0x208], 1`), which is reached through a controller message dispatcher at `0x015675a8` that branches on `[rdi+0x1d8]` (controller state/type). On BLE, the state is 3-4 instead of 1-2, so the path is never taken. **Recommended next step**: Write a C library loaded via `LD_PRELOAD` that patches the conditional jump `je 0x10d4fd0` at `0x10d4da6` to `nop nop`, forcing 0x8F dispatch regardless of the gate. 55-65% probability of working. If it crashes, GDB watchpoint reveals what gate controls. If it works, Steam haptics (trackpad clicks, UI feedback) will flow to Neptune motors.
+2. **ATT Server Spec Compliance** — Implement one at a time, test each:
    - Read Blob error code (0x01 → 0x07)
    - MTU caps on Read/Notify PDUs
    - PDU length validation
    - ATT permission checking (Read + Write Request only, NOT Write Command)
    - Fix diagnostic handle labels
-4. **GET_SERIAL Format** — FIXED: byte[1] changed from 0x14 to 0x15 (matches write command). Serial must start with 'F' (0x46) to pass V_strncmp validation at 0x26b1ac0.
 
 ### Files You Must Read Before Making Changes
 
@@ -127,7 +118,7 @@ Make a **Steam Deck** present itself as a **Steam Controller 2026 (SC2)** over *
 
 | File | Lines | Why |
 |------|-------|-----|
-| **AGENTS.md** (this file) | 542 | Full project context, architecture, how to run, gotchas, working principles |
+| **AGENTS.md** (this file) | 615 | Full project context, architecture, how to run, gotchas, working principles |
 | `docs/sc2-protocol.md` | 172 | SC2 BLE protocol — PIDs, UUIDs, report formats, button bitmask, mode switching |
 | `docs/att-server-implementation.md` | 134 | ATT opcode table, handle layout, host discovery sequence, CCCD handling |
 | `research/raw-l2cap-viability.md` | 76 | Confirmed working socket setup code, architecture diagram, ATT opcodes |
@@ -573,7 +564,7 @@ Sticks, triggers, trackpads, IMU — see `docs/sc2-protocol.md` for full format.
 ## Project File Structure
 
 ```
-/home/philip/steamdeck-sc2-spoof/
+/home/philip/spoofdeck-modified/
 ├── AGENTS.md                    ← YOU ARE HERE (read this first!)
 ├── README.md                    # Project overview
 ├── docs/
