@@ -56,6 +56,8 @@ Deploy one change, capture results, evaluate. Don't add diagnostic logging AND f
 | What report types does Steam use for UI haptics? | Possibly 0x81-0x85 (pulse, command, LFO, sweep, script) rather than 0x80 (rumble) | Check btmon for non-0x80 output reports during Steam UI interaction |
 | Does `find_report_by_rtype()` succeed for in-game rumble? | Yes — confirmed by working end-to-end pipeline with Celeste | N/A — already confirmed |
 | Do haptic writes reach our ATT server via 0x12? | Yes — confirmed by working end-to-end pipeline with Celeste | N/A — already confirmed |
+| Is 0x8F the gate for Steam haptics? | 0x8F appears 16 times on native but NEVER on BLE. This may gate haptic dispatch. | Verify with `strings` on steamclient.so for "YieldingRunTestProgram". Binary analysis needed. |
+| Does the GET_SERIAL write data affect haptics? | Native and BLE send different serial hashes. Our handler ignores write data. | Test with native serial hash format to see if haptics appear. |
 
 ---
 
@@ -105,6 +107,16 @@ Add to `_handle_write_cmd()` AND `_handle_write()` in `att_server.py`:
 ### Step 4: Investigate Steam-Generated Haptics
 
 In-game rumble is confirmed working. The remaining question is why Steam-generated haptics (trackpad clicks, UI feedback) do NOT produce rumble.
+
+**New evidence from 2026-06-29 session:**
+- Native Deck sends 0x8F (haptic feedback) 16 times during initialization. BLE NEVER sends 0x8F. **Confidence: Confirmed**
+- This is the most significant difference between native and BLE haptics behavior.
+- The 0x8F command may gate haptic dispatch in steamclient.so.
+
+**If 0x8F is the gate:**
+- We need to respond to 0x8F Feature Report writes on handle 0x0024.
+- Our current handler returns zero-padded echo for unknown commands.
+- Need to verify: does the response format matter, or is the write itself sufficient?
 
 **If Steam uses report types 0x81-0x85 for UI haptics:**
 - Our `_on_haptic_write()` only handles 0x80 (rumble). Add handlers for 0x81-0x85.

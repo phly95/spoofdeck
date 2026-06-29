@@ -1221,3 +1221,129 @@ Report Map declares output report 0x80, CHR_REPORT exists at handle 0x0019 with 
 | `functions/haptic_dead_code_analysis.c` | **NEW** Analysis of 0x17252a0 and its lack of callers |
 | `functions/sdl_rumble_capability.c` | **NEW** SDL.joystick.cap.rumble analysis |
 | `functions/set_report_failure.c` | **NEW** hog-ll SET_REPORT failure analysis |
+
+---
+
+## SESSION 8 (2026-06-29) — Native Deck vs BLE Haptics Comparison
+
+### Finding: 0x8F Haptic Feedback Command Appears on Native but NOT on BLE
+
+**Status: CONFIRMED**
+
+Native Deck HIDIOCSFEATURE capture shows 124 calls in 35 seconds during initialization. Command breakdown:
+- 0x87 SET_SETTINGS: 61 calls
+- 0x81 ClearDigitalMappings: 38 calls
+- **0x8F Haptic: 16 calls**
+- 0xAE GET_SERIAL: 4 calls
+- 0x83 GET_ATTRIBUTES: 2 calls
+- 0xC1/0xDC/0xE2: 1 each
+
+**0x8F appears 16 times on native but NEVER on BLE.** This is the most significant difference between native and BLE haptics behavior. **Confidence: Confirmed**
+
+### Finding: 0x8F Appears During Initialization and Steady State
+
+**Status: CONFIRMED**
+
+0x8F appears during initialization (positions 9,10 right after SET_SETTINGS commands) and during steady state. This suggests 0x8F is not just an initialization command but an ongoing haptic feedback mechanism. **Confidence: Confirmed**
+
+### Finding: All Commands Go Through HIDIOCSFEATURE
+
+**Status: CONFIRMED**
+
+All commands on native Deck go through HIDIOCSFEATURE (SET_FEATURE), NOT write() (output report). This means the haptic commands are Feature Reports, not Output Reports. **Confidence: Confirmed**
+
+### Finding: Initial Handshake Sequence on Native
+
+**Status: CONFIRMED**
+
+The initial handshake sequence on native Deck is:
+```
+0x83 → 0xAE → 0xAE → 0x81 → 0x87×4 → 0x8F×2 → 0x81 → 0x87 → ...
+```
+**Confidence: Confirmed**
+
+### Finding: BLE Handshake Sends Full Command Suite
+
+**Status: CONFIRMED**
+
+Steam DOES send the full command suite on BLE:
+- 0x87×55 SET_SETTINGS
+- 0x81×8 ClearDigitalMappings
+- 0xAE×19 GET_SERIAL (retrying)
+- 0x83×1 GET_ATTRIBUTES
+- 0xC1/0xDC/0xE2/0xF2×1 each
+
+**Confidence: Confirmed**
+
+### Finding: GET_SERIAL Retries Differ Between Native and BLE
+
+**Status: CONFIRMED**
+
+GET_SERIAL retries 19 times on BLE vs 4 on native. This suggests the BLE path has more difficulty completing the serial handshake. **Confidence: Confirmed**
+
+### Finding: Controller IS Registered on BLE
+
+**Status: CONFIRMED**
+
+controller_ui.txt shows "Auto-Registering controller: F0000-0000-00000000, 12345678". The serial "F0000-0000-00000000" IS accepted by Steam. **Confidence: Confirmed**
+
+### Finding: "Skipping usage report" is Normal
+
+**Status: CONFIRMED**
+
+"Skipping usage report" is normal behavior that happens on both native and BLE. This is NOT an error. **Confidence: Confirmed**
+
+### Finding: Native vs BLE GET_SERIAL Write Data Differs
+
+**Status: CONFIRMED**
+
+Native GET_SERIAL write data: `ae 15 01 05 12 00 00 02 00 00 00 00 0a 2b 12 a9 62 04 3c b0 c6 69`
+BLE GET_SERIAL write data: `ae 15 04 00 34 5e bc e8 5c d7 8f c5 c8 d8 8f c5 a0 48 a7 e8 07 00`
+
+Write data differs between native and BLE (different serial hashes). Our handler ignores write data and returns fixed synthetic serial. **Confidence: Confirmed**
+
+### Finding: 0x8F Gate Hypothesis (UNVERIFIED)
+
+**Status: UNVERIFIED — May Be Hallucination**
+
+Subagent claimed:
+- `[r15+0x208]` at `0x10d4da0` gates 0x8F dispatch
+- `YieldingRunTestProgram` at `0x15677f4` is the ONLY function that sets this flag
+
+**WARNING**: `strings` on steamclient.so shows NO "YieldingRunTestProgram" string. This may be a hallucination from the subagent. Needs verification via binary analysis. **Confidence: Unverified**
+
+### Finding: Native Deck HID Capture Method
+
+**Status: CONFIRMED**
+
+- strace with `-f` flag (follow forks) on the Steam process
+- Must capture from BEFORE Steam opens the hidraw device
+- Watch for `/dev/hidraw4` to appear, then strace the owner PID with `-f`
+- HIDIOCSFEATURE calls use Report ID 0x00 (first byte)
+- All calls are 65 bytes (Report ID + 64 bytes payload)
+**Confidence: Confirmed**
+
+### Finding: ATT Server Write Response Handling
+
+**Status: CONFIRMED**
+
+Feature Report writes arrive as ATT Write Request (0x12) on handle 0x0024. Our handler stores the write data and sends ATT Write Response. Need to verify: does the response format match what BlueZ's UHID layer expects? **Confidence: Write arrival Confirmed, response format Unverified**
+
+### Implications for Steam Haptics Investigation
+
+The 0x8F command is the most promising lead for understanding why Steam-generated haptics do not work on BLE. Possible explanations:
+
+1. **0x8F gates haptic dispatch** — If 0x8F is required for haptics to function, its absence on BLE explains why Steam-generated haptics don't work.
+2. **0x8F is a haptic feedback acknowledgment** — On native, the controller sends 0x8F back to Steam. On BLE, our handler returns zero-padded echo, which may not match the expected format.
+3. **0x8F is irrelevant** — Its absence on BLE may be coincidental, and the real blocker is elsewhere.
+
+The next step is to investigate whether responding to 0x8F with the correct format enables Steam haptics on BLE.
+
+### Files Generated
+
+| File | Content |
+|------|---------|
+| `functions/native_hidio_csfeature_capture.c` | **NEW** Analysis of native Deck HIDIOCSFEATURE calls |
+| `functions/ble_handshake_comparison.c` | **NEW** Native vs BLE handshake comparison |
+| `functions/0x8f_haptic_gate.c` | **NEW** Analysis of 0x8F as potential haptic gate |
+| `functions/serial_write_data_diff.c` | **NEW** Native vs BLE GET_SERIAL write data differences |

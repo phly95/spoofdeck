@@ -111,6 +111,34 @@ We present the **Steam Deck** as a **Steam Controller 2026 (SC2 / Triton)** over
 - **Status**: Trackpad clicks, UI feedback haptics, and other Steam-internal haptic events do NOT produce rumble.
 - **Root cause**: These come from Steam's own haptic system, not from `SDL_RumbleJoystick()`. The Steam haptic path uses a different code path that does not reach the Neptune motors. Only games that explicitly call `SDL_RumbleJoystick()` produce rumble.
 - **Known dead end**: `0x17252a0` (haptic trigger function in steamclient.so) has ZERO callers — confirmed dead code.
+
+#### Native Deck vs BLE Haptics Comparison (2026-06-29)
+
+**Native Deck (HIDIOCSFEATURE capture):**
+- Steam sends 124 HIDIOCSFEATURE calls in 35 seconds during initialization.
+- Command breakdown: 0x87 SET_SETTINGS (61), 0x81 ClearDigitalMappings (38), **0x8F Haptic (16)**, 0xAE GET_SERIAL (4), 0x83 GET_ATTRIBUTES (2), 0xC1/0xDC/0xE2 (1 each).
+- **0x8F (haptic feedback) appears 16 times on native but NEVER on BLE.** **Confidence: Confirmed**
+- 0x8F appears during initialization (positions 9,10 right after SET_SETTINGS) and during steady state.
+- All commands go through HIDIOCSFEATURE (SET_FEATURE), NOT write() (output report).
+- Initial handshake sequence: 0x83 → 0xAE → 0xAE → 0x81 → 0x87×4 → 0x8F×2 → 0x81 → 0x87 → ...
+
+**BLE Handshake:**
+- Steam DOES send the full command suite on BLE: 0x87×55, 0x81×8, 0xAE×19 (retrying), 0x83×1, 0xC1/0xDC/0xE2/0xF2×1. **Confidence: Confirmed**
+- GET_SERIAL retries 19 times on BLE vs 4 on native. **Confidence: Confirmed**
+- SET_SETTINGS 0x09 retries every 3 seconds on BLE. **Confidence: Confirmed**
+- **Controller IS registered** (controller_ui.txt shows "Auto-Registering controller: F0000-0000-00000000, 12345678"). **Confidence: Confirmed**
+- "Skipping usage report" is normal behavior (happens on both native and BLE). **Confidence: Confirmed**
+
+**Native vs BLE GET_SERIAL write data differs:**
+- Native: `ae 15 01 05 12 00 00 02 00 00 00 00 0a 2b 12 a9 62 04 3c b0 c6 69`
+- BLE: `ae 15 04 00 34 5e bc e8 5c d7 8f c5 c8 d8 8f c5 a0 48 a7 e8 07 00`
+- Write data differs between native and BLE (different serial hashes). Our handler ignores write data and returns fixed synthetic serial. **Confidence: Confirmed**
+
+**0x8F gate hypothesis (UNVERIFIED):**
+- Subagent claimed `[r15+0x208]` at `0x10d4da0` gates 0x8F dispatch.
+- Subagent claimed `YieldingRunTestProgram` at `0x15677f4` is the ONLY function that sets this flag.
+- **WARNING**: `strings` on steamclient.so shows NO "YieldingRunTestProgram" string. This may be a hallucination. Needs verification. **Confidence: Unverified**
+
 - **What was fixed this session**:
   1. **Rumble format**: Fixed to match InputPlumber's PackedRumbleReport — `[0xeb, 0x09, 0x00, 0x00, 0x00, left_lo, left_hi, right_lo, right_hi]` padded to 64 bytes. Old format had wrong trailing bytes.
   2. **Lizard mode commands**: NEPTUNE_LIZARD_OFF_CMDS had wrong Report ID prefix (`0x01 0x00` instead of direct `0x81`). InputPlumber analysis revealed the correct format.

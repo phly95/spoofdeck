@@ -75,13 +75,21 @@ The in-game rumble pipeline works. The remaining question is why Steam-generated
 
 **Key observation**: Steam schedules haptics (`CPulseHapticWorkItem`) but writes fail in 0.0ms for UI haptics, while game rumble via `SDL_RumbleJoystick()` works.
 
+**Native Deck vs BLE comparison (2026-06-29):**
+- **Native Deck**: Steam sends 124 HIDIOCSFEATURE calls in 35 seconds. 0x8F (haptic feedback) appears 16 times on native but NEVER on BLE. **Confidence: Confirmed**
+- **BLE**: Steam sends full command suite (0x87×55, 0x81×8, 0xAE×19, 0x83×1) but 0x8F never appears. GET_SERIAL retries 19 times on BLE vs 4 on native. **Confidence: Confirmed**
+- **Controller IS registered** on BLE — serial "F0000-0000-00000000" accepted. **Confidence: Confirmed**
+- **Native vs BLE GET_SERIAL write data differs** — different serial hashes. Our handler ignores write data and returns fixed synthetic serial. **Confidence: Confirmed**
+
 **Possible hypotheses (ranked by likelihood):**
 
-1. **Steam uses report types 0x81-0x85 for UI haptics** — The SC2 protocol has 6 haptic report types (0x80-0x85). Games use 0x80 (rumble). Steam UI may use 0x81 (pulse), 0x82 (command), etc. Our `_on_haptic_write()` only handles 0x80.
+1. **0x8F haptic feedback command is the gate** — 0x8F appears 16 times on native but NEVER on BLE. This command may gate haptic dispatch. Subagent claims `[r15+0x208]` at `0x10d4da0` gates 0x8F dispatch, and `YieldingRunTestProgram` at `0x15677f4` is the ONLY function that sets this flag. **WARNING: `strings` on steamclient.so shows NO "YieldingRunTestProgram" string. This may be a hallucination. Needs verification. Confidence: Unverified**
 
-2. **Steam's internal haptic path doesn't go through SDL_hid_write()** — Steam may have a direct HID write path that bypasses SDL, or uses a different interface entirely.
+2. **Steam uses report types 0x81-0x85 for UI haptics** — The SC2 protocol has 6 haptic report types (0x80-0x85). Games use 0x80 (rumble). Steam UI may use 0x81 (pulse), 0x82 (command), etc. Our `_on_haptic_write()` only handles 0x80.
 
-3. **Steam haptics need specific register values** — SET_SETTINGS configures registers that gate haptic behavior. If certain registers aren't set correctly, Steam may skip UI haptics.
+3. **Steam's internal haptic path doesn't go through SDL_hid_write()** — Steam may have a direct HID write path that bypasses SDL, or uses a different interface entirely.
+
+4. **Steam haptics need specific register values** — SET_SETTINGS configures registers that gate haptic behavior. If certain registers aren't set correctly, Steam may skip UI haptics.
 
 **Testing approach:**
 - For each hypothesis: predict what you'd observe IF true, make ONE change, test, evaluate

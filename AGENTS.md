@@ -104,14 +104,20 @@ Make a **Steam Deck** present itself as a **Steam Controller 2026 (SC2)** over *
 
 ### What Needs to Happen Next
 
-1. **Investigate Steam-generated haptics** — Trackpad clicks and UI feedback haptics do NOT produce rumble. These come from Steam's internal haptic system, not from `SDL_RumbleJoystick()`. The Steam haptic path may use a different report type (e.g., 0x81-0x85) or a different code path entirely. A real SC2 btmon capture would reveal what reports Steam sends for UI haptics.
-2. **ATT Server Spec Compliance** — Implement one at a time, test each:
+1. **Investigate Steam-generated haptics** — Trackpad clicks and UI feedback haptics do NOT produce rumble. These come from Steam's internal haptic system, not from `SDL_RumbleJoystick()`. The Steam haptic path uses a different code path that does not reach the Neptune motors. Only games that call `SDL_RumbleJoystick()` produce rumble.
+2. **Steam Haptics Investigation (2026-06-29)** — See `docs/findings-backlog.md` for full details. Key findings:
+   - **Native Deck (HIDIOCSFEATURE capture)**: Steam sends 124 HIDIOCSFEATURE calls in 35 seconds during initialization. 0x8F (haptic feedback) appears 16 times on native but NEVER on BLE. **Confidence: Confirmed**
+   - **BLE handshake**: Steam DOES send the full command suite on BLE (0x87x55, 0x81x8, 0xAEx19, 0x83x1, 0xC1/0xDC/0xE2/0xF2x1). GET_SERIAL retries 19 times on BLE vs 4 on native. **Confidence: Confirmed**
+   - **0x8F gate hypothesis**: Subagent claims `[r15+0x208]` at `0x10d4da0` gates 0x8F dispatch, and `YieldingRunTestProgram` at `0x15677f4` is the ONLY function that sets this flag. **WARNING: `strings` on steamclient.so shows NO "YieldingRunTestProgram" string. This may be a hallucination. Needs verification. Confidence: Unverified**
+   - **Controller IS registered**: serial "F0000-0000-00000000" IS accepted by Steam. "Skipping usage report" is normal behavior (happens on both native and BLE). **Confidence: Confirmed**
+   - **Native vs BLE GET_SERIAL write data differs**: Native: `ae 15 01 05 12 00 00 02 00 00 00 00 0a 2b 12 a9 62 04 3c b0 c6 69`. BLE: `ae 15 04 00 34 5e bc e8 5c d7 8f c5 c8 d8 8f c5 a0 48 a7 e8 07 00`. Our handler ignores write data and returns fixed synthetic serial. **Confidence: Confirmed**
+3. **ATT Server Spec Compliance** — Implement one at a time, test each:
    - Read Blob error code (0x01 → 0x07)
    - MTU caps on Read/Notify PDUs
    - PDU length validation
    - ATT permission checking (Read + Write Request only, NOT Write Command)
    - Fix diagnostic handle labels
-3. **GET_SERIAL Format** — FIXED: byte[1] changed from 0x14 to 0x15 (matches write command). Serial must start with 'F' (0x46) to pass V_strncmp validation at 0x26b1ac0.
+4. **GET_SERIAL Format** — FIXED: byte[1] changed from 0x14 to 0x15 (matches write command). Serial must start with 'F' (0x46) to pass V_strncmp validation at 0x26b1ac0.
 
 ### Files You Must Read Before Making Changes
 

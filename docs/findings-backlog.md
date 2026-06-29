@@ -136,6 +136,45 @@ Steam-generated haptics (trackpad clicks, UI feedback) use a different code path
 - Check Deck logs for "Write Request: handle=0x0019" — enhanced logging should capture this
 - Verify `find_report_by_rtype()` succeeds — if it returns NULL, `forward_report()` silently drops the write. Could be caused by wrong Report Reference descriptor or missing output report registration in BlueZ's report list
 
+### Native Deck vs BLE Haptics Comparison (2026-06-29)
+
+**Native Deck (HIDIOCSFEATURE capture):**
+- Steam sends 124 HIDIOCSFEATURE calls in 35 seconds during initialization. **Confidence: Confirmed**
+- Command breakdown: 0x87 SET_SETTINGS (61), 0x81 ClearDigitalMappings (38), **0x8F Haptic (16)**, 0xAE GET_SERIAL (4), 0x83 GET_ATTRIBUTES (2), 0xC1/0xDC/0xE2 (1 each). **Confidence: Confirmed**
+- **0x8F (haptic feedback) appears 16 times on native but NEVER on BLE.** **Confidence: Confirmed**
+- 0x8F appears during initialization (positions 9,10 right after SET_SETTINGS) and during steady state. **Confidence: Confirmed**
+- All commands go through HIDIOCSFEATURE (SET_FEATURE), NOT write() (output report). **Confidence: Confirmed**
+- Initial handshake sequence: 0x83 → 0xAE → 0xAE → 0x81 → 0x87×4 → 0x8F×2 → 0x81 → 0x87 → ... **Confidence: Confirmed**
+
+**BLE Handshake:**
+- Steam DOES send the full command suite on BLE: 0x87×55, 0x81×8, 0xAE×19 (retrying), 0x83×1, 0xC1/0xDC/0xE2/0xF2×1. **Confidence: Confirmed**
+- GET_SERIAL retries 19 times on BLE vs 4 on native. **Confidence: Confirmed**
+- SET_SETTINGS 0x09 retries every 3 seconds on BLE. **Confidence: Confirmed**
+- **Controller IS registered** (controller_ui.txt shows "Auto-Registering controller: F0000-0000-00000000, 12345678"). **Confidence: Confirmed**
+- "Skipping usage report" is normal behavior (happens on both native and BLE). **Confidence: Confirmed**
+
+**Native vs BLE GET_SERIAL write data differs:**
+- Native: `ae 15 01 05 12 00 00 02 00 00 00 00 0a 2b 12 a9 62 04 3c b0 c6 69`
+- BLE: `ae 15 04 00 34 5e bc e8 5c d7 8f c5 c8 d8 8f c5 a0 48 a7 e8 07 00`
+- Write data differs between native and BLE (different serial hashes). Our handler ignores write data and returns fixed synthetic serial. **Confidence: Confirmed**
+
+**0x8F gate hypothesis (UNVERIFIED):**
+- Subagent claimed `[r15+0x208]` at `0x10d4da0` gates 0x8F dispatch. **Confidence: Unverified**
+- Subagent claimed `YieldingRunTestProgram` at `0x15677f4` is the ONLY function that sets this flag. **Confidence: Unverified**
+- **WARNING**: `strings` on steamclient.so shows NO "YieldingRunTestProgram" string. This may be a hallucination. Needs verification. **Confidence: Unverified**
+
+**ATT Server Write Response Handling:**
+- Feature Report writes arrive as ATT Write Request (0x12) on handle 0x0024. **Confidence: Confirmed**
+- Our handler stores the write data and sends ATT Write Response. **Confidence: Confirmed**
+- Need to verify: does the response format match what BlueZ's UHID layer expects? **Confidence: Unverified**
+
+**Native Deck HID Capture Method:**
+- strace with `-f` flag (follow forks) on the Steam process. **Confidence: Confirmed**
+- Must capture from BEFORE Steam opens the hidraw device. **Confidence: Confirmed**
+- Watch for `/dev/hidraw4` to appear, then strace the owner PID with `-f`. **Confidence: Confirmed**
+- HIDIOCSFEATURE calls use Report ID 0x00 (first byte). **Confidence: Confirmed**
+- All calls are 65 bytes (Report ID + 64 bytes payload). **Confidence: Confirmed**
+
 ### SC2 → Neptune Haptic Translation
 
 **Key insight**: Games only use SC2 report 0x80 (rumble) via `SDL_RumbleJoystick()`. The other 5 types (pulse, command, LFO tone, log sweep, script) are never sent by games.
