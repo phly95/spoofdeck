@@ -376,6 +376,49 @@ right_speed → right_intensity (uint16 LE at bytes 7-8)
 
 ---
 
+## 32-bit Binary GDB Runtime Verification (2026-06-29)
+
+> **CRITICAL**: All prior binary analysis was on the WRONG binary (64-bit). This section contains verified 32-bit addresses from the actual running Steam process.
+
+### Correct 32-bit Addresses (from GDB + r2 analysis)
+
+| What | 32-bit VA | Function Start | Notes |
+|------|-----------|----------------|-------|
+| **YieldingRunTestProgram string ref** | `0x0178a164` | `0x01789ea0` | `lea ecx, [edi - 0x230ae0d]` loads string at `0x00bfc7e3` |
+| **Gate SET** | `0x0178a140` | `0x01789ea0` | `mov byte [esi + 0x17c], 1` (NOT 0x208!) |
+| **Gate CHECK #1** | `0x0123e5fb` | `0x0123e5da` | `cmp byte [esi+0x17c], 0` → `jne 0x123e898` (skip if set) |
+| **Gate CHECK #2** | `0x02b82326` | `0x02b8213a` | `cmp byte [esi+0x17c], 0` → `je 0x2b82870` (skip if NOT set) |
+| **Gate CHECK #3** | `0x0123f11a` | `0x0123e5da` | `cmp byte [ebp+0x17c], 0` → `je 0x123f340` |
+| **0x8F Dispatcher #1** | `0x00ec13a4` | `0x00ec1330` | Jump table, `cmp eax, 0x8f`, `shr ecx, 3` |
+| **0x8F Dispatcher #2** | `0x00eed3c4` | `0x00eed350` | Same pattern, different jump table |
+| **0x8F Handler** | `0x028939f4` | (large func) | `je 0x2893aeb` → sets `[esi+0x1a8]=0xc, [esi+0x1b0]=0x3f` |
+
+### GOT Base
+- Register: `edi`
+- Value: `0x02f075f0`
+- String displacement: `0x00bfc7e3 - 0x02f075f0 = -0x0230ae0d = 0xFDCF51F3` (little-endian: `f3 51 cf fd`)
+
+### Key Difference from 64-bit
+- 64-bit gate offset: `0x208` → 32-bit gate offset: `0x17c` (pointer size difference)
+- 64-bit gate register: `r15` → 32-bit gate register: `esi`
+
+### GDB Runtime Test Results (2026-06-29)
+
+**Test**: Set breakpoints on gate SET (`0xdaf0b140`), gate CHECK (`0xda9bf5fb`), and 0x8F dispatcher (`0xda6423a4`) in the running Steam process, then connected BLE device.
+
+**Result: ZERO breakpoints hit during 30-second BLE connection.**
+
+This means:
+1. The YieldingRunTestProgram function is **never called** during BLE connection
+2. The gate CHECK function is **never called** during BLE connection
+3. The 0x8F command dispatcher is **never called** during BLE connection
+
+**Implication**: The issue is NOT that the gate blocks 0x8F. The issue is that the **entire command dispatch path** involving these functions is never entered on BLE. The 0x8F command is never even attempted by Steam.
+
+**Hypothesis**: Steam's HID output path (which sends 0x8F haptic commands) is only activated when the controller passes certain initialization checks. On BLE, these checks fail or stall, so the output path is never enabled. The gate at `[esi+0x17c]` may be in a code path that is never reached, not a gate that blocks 0x8F.
+
+---
+
 ## Implementation Order
 
 When implementing fixes, follow this order (one at a time, test between each):
