@@ -83,7 +83,8 @@
  * REQUIREMENT: Serial must start with 'F' (0x46).
  * LENGTH: 20 bytes (from V_memcpy size 0x14).
  *
- * Recommended format: First byte 'F', remaining 19 bytes unknown.
+ * Example: "F000000000000000000" (20 bytes)
+ *
  * No real SC2 serials available for reference.
  *
  * Breakdown:

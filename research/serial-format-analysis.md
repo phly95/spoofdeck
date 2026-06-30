@@ -117,6 +117,8 @@
  * Length: 20 bytes (from V_memcpy size 0x14).
  * Internal format: Unknown without a real SC2 device to capture.
  *
+ * Example: "F000000000000000000" (20 bytes)
+ *
  * Recommendation: Use "F" + any 19 bytes. Test against Steam to see if
  * secondary validation rejects it.
  *
