@@ -85,7 +85,6 @@
  *
  * Recommended format: First byte 'F', remaining 19 bytes unknown.
  * No real SC2 serials available for reference.
- * The "BTW1" format is an unverified guess — use at your own risk.
  *
  * Breakdown:
  *   'F'        = Valve hardware serial prefix (passes V_strncmp)
@@ -125,8 +124,7 @@
  *
  * Our serial fails because serial[0] = '2', not 'F'.
  *
- * Fix: Change serial to start with 'F'. Use format:
- *   "FBTW1-XXXXXXXX-XXXX" (20 chars)
+ * Fix: Change serial to start with 'F'. Remaining bytes unknown.
  *
  * The V_strncmp check is the first gate. After passing it,
  * the serial is copied to the controller info struct. Then
