@@ -114,7 +114,8 @@
  * FIX: Change the serial in the GET_SERIAL response to start with 'F'.
  * 
  * Required: First byte must be 'F' (0x46) to pass V_strncmp validation.
- * Remaining 19 bytes: Format unknown without a real SC2 device to capture.
+ * Length: 20 bytes (from V_memcpy size 0x14).
+ * Internal format: Unknown without a real SC2 device to capture.
  *
  * Recommendation: Use "F" + any 19 bytes. Test against Steam to see if
  * secondary validation rejects it.

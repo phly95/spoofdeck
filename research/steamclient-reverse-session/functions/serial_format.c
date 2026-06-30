@@ -81,7 +81,7 @@
  * ============================================================
  *
  * REQUIREMENT: Serial must start with 'F' (0x46).
- * LENGTH: Up to 20 bytes (null-terminated string).
+ * LENGTH: 20 bytes (from V_memcpy size 0x14).
  *
  * Recommended format: First byte 'F', remaining 19 bytes unknown.
  * No real SC2 serials available for reference.
@@ -124,7 +124,7 @@
  *
  * Our serial fails because serial[0] = '2', not 'F'.
  *
- * Fix: Change serial to start with 'F'. Remaining bytes unknown.
+ * Fix: Change serial to start with 'F' (20 bytes total).
  *
  * The V_strncmp check is the first gate. After passing it,
  * the serial is copied to the controller info struct. Then
