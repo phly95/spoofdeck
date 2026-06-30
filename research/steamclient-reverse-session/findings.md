@@ -1641,9 +1641,9 @@ The next step is to investigate whether responding to 0x8F with the correct form
 
 ### Files Generated
 
-| File | Content |
-|------|---------|
-| `functions/native_hidio_csfeature_capture.c` | **NEW** Analysis of native Deck HIDIOCSFEATURE calls |
-| `functions/ble_handshake_comparison.c` | **NEW** Native vs BLE handshake comparison |
-| `functions/0x8f_haptic_gate.c` | **NEW** Analysis of 0x8F as potential haptic gate |
-| `functions/serial_write_data_diff.c` | **NEW** Native vs BLE GET_SERIAL write data differences |
+| File | Content | Status |
+|------|---------|--------|
+| `functions/haptic_feature_report.c` | Haptic feature report analysis | Created |
+| `functions/ble_haptic_path.c` | BLE haptic path analysis | Created |
+| `functions/haptic_payload.c` | Haptic payload construction | Created |
+| `functions/haptic_trigger.c` | Haptic trigger analysis | Created |

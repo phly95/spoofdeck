@@ -102,17 +102,48 @@ Make a **Steam Deck** present itself as a **Steam Controller 2026 (SC2)** over *
 
 **NOTE (2026-06-26 evening)**: After host PC reboot, input IS flowing. The stale BlueZ state from previous sessions was blocking SET_REPORT. A reboot cleared it. This explains why the issues appeared pre-existing — the cached state persisted across code deploys.
 
+### What Was Fixed (2026-06-29)
+
+1. **Rumble format** — Fixed to match InputPlumber's PackedRumbleReport: `[0xeb, 0x09, 0x00, 0x00, 0x00, left_lo, left_hi, right_lo, right_hi]` padded to 64 bytes
+2. **Lizard mode commands** — NEPTUNE_LIZARD_OFF_CMDS had wrong Report ID prefix (`0x01 0x00` → direct `0x81`)
+3. **EVIOCGRAB** — Grabs event4/event5 at startup to prevent lizard mode evdev events from reaching KDE desktop
+4. **BlueZ hog-lib.c analysis** — Confirmed `forward_report()` uses ATT Write Request (0x12), not Write Command (0x52)
+5. **Manual write test** — Writing directly to `/dev/hidrawN` on host confirmed UHID output path works end-to-end
+
 ### What Needs to Happen Next
 
 1. ~~**⚠️ CRITICAL: ALL PRIOR BINARY ANALYSIS WAS ON THE WRONG BINARY**~~ — **RESOLVED (2026-06-30)**. All RE analysis files updated to use 32-bit (`ubuntu12_32/steamclient.so`) addresses. 56 files changed, 1424 insertions, 1345 deletions. 52 string addresses verified, 26 function addresses marked `[NEEDS RE-ANALYSIS]`.
 2. **GDB on host Steam process (RECOMMENDED NEXT STEP)** — Breakpoint on `CGetControllerInfoWorkItem::RunFunc` (0x01218840) to see what `SDL_hid_read_timeout` returns. This will confirm whether the HID read gets 0 bytes (timing issue) or wrong data (format issue). Alternative: capture Steam's controller.txt logs and btmon ATT traffic during BLE connection.
 3. **LD_PRELOAD patch for 0x8F gate (AFTER INITIALIZATION FIX)** — The gate CHECK at `0x0123e5fa` can be patched, but only after the initialization chain is fixed to actually reach that code path. 55-65% probability of working once the chain is unblocked.
-2. **ATT Server Spec Compliance** — Implement one at a time, test each:
+4. **ATT Server Spec Compliance** — Implement one at a time, test each:
    - Read Blob error code (0x01 → 0x07)
    - MTU caps on Read/Notify PDUs
    - PDU length validation
    - ATT permission checking (Read + Write Request only, NOT Write Command)
    - Fix diagnostic handle labels
+
+### Structured Protocol Logging
+
+`SPOOFDECK_PROTO_LOG=1` enables structured JSON logging to stderr. Covers ATT Write Request (0x12), Write Command (0x52), Read Request (0x0A), Read Blob (0x0C), notifications, haptic writes, and SC2 command processing. Parse with `scripts/extract_proto_trace.py`.
+
+### Audit Findings (32-bit Addresses)
+
+| 32-bit Offset | Function/Label | Status |
+|---------|---------------|--------|
+| `0x0178a140` | Gate SET (`mov byte [esi+0x17c], 1`) | **VERIFIED** |
+| `0x0123e5fb` | Gate CHECK (`cmp byte [esi+0x17c], 0`) | **VERIFIED** |
+| `0x00bfc7e3` | YieldingRunTestProgram string | **VERIFIED** |
+| `0x01218840` | CGetControllerInfoWorkItem::RunFunc | **VERIFIED** (Ghidra) |
+| `0x015675a8` | Controller message dispatcher | **NEEDS GDB** |
+| `0x015677f4` | YRT allocation | **NEEDS GDB** |
+| `0x01559070` | Graphics API type writer | **NEEDS GDB** |
+
+### Ghidra Analysis Results
+
+Ghidra 11.3.1 at `~/ghidra`. Key findings:
+- `CGetControllerInfoWorkItem::RunFunc` (0x01218840) calls `SDL_hid_read_timeout` via vtable[5] and gets **0 bytes**. Retries 51 × 100ms = 5.1s, then fails. Init chain stalls before haptics enabled.
+- Init chain: `CHIDIOThread_Main` → `CWorkItemThread` → `CGetControllerInfoWorkItem` (STALLS) → `EYldWaitForControllerDetails` → gate SET (never reached)
+- Exports at `~/ghidra-projects/exports/32bit/`: functions.csv (141K), strings.csv (56K), controller_decompiled_32bit.txt, call_graph.csv
 
 ### Files You Must Read Before Making Changes
 
@@ -130,7 +161,7 @@ Make a **Steam Deck** present itself as a **Steam Controller 2026 (SC2)** over *
 
 | File | Read This Section | Why |
 |------|-------------------|-----|
-| `research/smp-pairing-summary.md` | Lines 1-50 | Quick answers: SMP and ATT are separate (CID 6 vs CID 4), kernel handles SMP |
+| `research/smp-pairing-bypass-bluez.md` | Lines 1-50 | Quick answers: SMP and ATT are separate (CID 6 vs CID 4), kernel handles SMP |
 | `research/implementation-roadmap.md` | Lines 1-50 | Architecture decision: keep BlueZ for SMP, custom ATT on CID 4 |
 | `docs/challenges.md` | Challenges #26-31 | Current bugs and fixes: UUID comparison, handle allocation, MTU format |
 
@@ -170,7 +201,7 @@ Make a **Steam Deck** present itself as a **Steam Controller 2026 (SC2)** over *
 
 **The pattern**: Spawn an actor with a specific question, get a concise answer back, act on it. Don't do the investigation yourself.
 
-> **📖 See `docs/actor-prompt-guide.md`** for templates and examples of how to formulate actor prompts. Read it before spawning any actor. It covers RE/binary analysis, deploy/test, and source code analysis prompts with correct structure, stop conditions, and parallelism rules.
+> **📖 See "Actor Prompt Templates" below** for templates and examples of how to formulate actor prompts. It covers RE/binary analysis, deploy/test, and source code analysis prompts with correct structure, stop conditions, and parallelism rules.
 
 ### Principle 2: Batch SSH Operations
 
@@ -317,6 +348,117 @@ Before starting work, check if you're about to:
 
 If any box is checked, redirect to an actor.
 
+### Actor Prompt Templates
+
+#### RE / Binary Analysis Actor
+
+```markdown
+You are reverse-engineering [TARGET] to answer [QUESTION].
+
+## Context
+[Current symptom/log output, what was already tried, why this matters — max 10 lines]
+
+Key addresses/strings:
+- [VA] — [what it is]
+- [String] at [VA] — [context]
+
+## What You Must Find
+
+### 1. [QUESTION] (CRITICAL/HIGH/MEDIUM)
+
+Steps:
+1. [Specific starting point — function name, RTTI string, or address]
+2. [What to look for]
+3. [What to save]
+
+Save to: research/steamclient-reverse-session/functions/[name].c
+
+## Tools
+
+**IMPORTANT: `aaa` is too slow on 46MB binaries — it will timeout. Use these instead:**
+
+```bash
+# Targeted disassembly — no analysis needed, instant
+r2 -q -c 's 0xADDR; pd 50' BINARY 2>/dev/null
+
+# Basic analysis only (fast, ~10s)
+r2 -q -c 'aa; s 0xADDR; af; pdf' BINARY 2>/dev/null
+
+# If function boundaries are already known
+r2 -q -c 's 0xADDR; af; pdf' BINARY 2>/dev/null
+
+# Search for strings
+r2 -q -c '/ STRING' BINARY 2>/dev/null
+
+# Find xrefs to an address (requires basic analysis first)
+r2 -q -c 'aa; axt @ 0xADDR' BINARY 2>/dev/null
+```
+
+**Rule of thumb**: Never use `aaa` or `aaaa`. Use `aa` (basic) or `s; pd` (raw) instead.
+
+## Stop Condition
+Deliver ONE of:
+1. "[Answer to question with evidence]"
+2. "[Function does X, fails because Y]"
+3. "[Our ATT server is missing/incorrect field Z]"
+```
+
+#### Deploy/Test Actor
+
+```markdown
+Deploy [WHAT] to the Deck and verify [WHAT].
+
+## Steps
+1. Deploy files via scp
+2. Restart service: `echo $DECK_PASSWORD | sudo -S systemctl restart sc2-hogp`
+3. Connect on host: remove, scan, connect via bluetoothctl
+4. Check results: [specific log grep commands]
+
+## Stop Condition
+Report: [did X happen?] [what do the logs show?] [pass/fail]
+```
+
+#### Source Code Analysis Actor
+
+```markdown
+Read [FILE] and answer these questions about [TOPIC].
+
+## Questions
+1. [Specific question]
+2. [Specific question]
+
+## Context
+[Why these questions matter — 2-3 sentences]
+
+## Stop Condition
+Deliver concise answers (not full source). Include addresses/code snippets as evidence.
+```
+
+#### Prompt Quality: Bad vs Good
+
+**Bad:**
+```
+Analyze why the controller becomes zombie. Check the binary and find the timer.
+```
+
+**Good:**
+```
+You are reverse-engineering why the SC2 BLE controller becomes zombie 6 seconds after opening.
+
+## Context
+Steam log shows:
+- "!! Steam controller device opened for index 0"
+- "Controller PollState Changed from 0 to 1"
+- "Disconnecting zombie controller 0" (6 seconds later)
+
+The zombie check at 0x011f7630 calls vtable[0x18] to get connection state.
+
+## What You Must Find
+### 1. What Does the Connection State Query Return? (HIGH)
+Steps: Disassemble 0x011f7630, trace vtable[0x18], find return value.
+Save to: research/steamclient-reverse-session/functions/zombie_connection_state.c
+```
+
 ### Principle 11: Parallelism Without Stepping on Toes
 
 When spawning multiple background actors, you must prevent them from competing for shared resources. This project has several exclusive resources that can only be used by one agent at a time.
@@ -400,6 +542,16 @@ Use `actor(operation="wait", actor_id=...)` to block until the previous actor fi
 #### The Quick Heuristic
 
 > **If two actors would both run `sshpass ssh deck@...` or both run `bluetoothctl`, they MUST NOT run in parallel.** Run them sequentially with `wait` between them.
+
+---
+
+## Important Rules
+
+1. **One change at a time** — Never stack fixes. If Fix A doesn't work, revert it, then try Fix B.
+2. **Evidence before conclusion** — Every finding must cite specific evidence. Tag with confidence level (Confirmed/Plausible/Speculative).
+3. **Spawn subagents for research** — Don't read 500+ lines of BlueZ source in the main thread. Use explore subagents.
+4. **Commit progress** — After each meaningful finding, commit: `git add -A && git commit -m "finding: <description>" && git push`
+5. **Stale state is the #1 cause of mysterious failures** — Every test cycle: clear bond data, restart BlueZ, reconnect.
 
 ---
 
@@ -557,8 +709,8 @@ Sticks, triggers, trackpads, IMU — see `docs/sc2-protocol.md` for full format.
 | `research/debug-bluetoothd-analysis.md` | Debug proof of BlueZ GATT listener bug |
 | `research/att-mtu-failure-analysis.md` | ATT MTU exchange failure root cause |
 | `research/smp-pairing-bypass-bluez.md` | SMP pairing works separately from ATT |
-| `research/smp-pairing-summary.md` | Quick reference for SMP/ATT separation |
 | `research/implementation-roadmap.md` | Step-by-step implementation plan |
+| `research/32bit_ghidra_findings.md` | Ghidra analysis results (controller behavior map) |
 | `docs/att-server-implementation.md` | ATT protocol implementation details |
 
 ---
@@ -571,38 +723,49 @@ Sticks, triggers, trackpads, IMU — see `docs/sc2-protocol.md` for full format.
 ├── README.md                    # Project overview
 ├── docs/
 │   ├── sc2-protocol.md          # SC2 BLE protocol details
+│   ├── att-server-implementation.md  # ATT protocol details
+│   ├── findings-backlog.md      # Known issues and technical findings
 │   ├── hardware-findings.md     # Deck hardware findings
 │   ├── challenges.md            # Known challenges and solutions
 │   ├── steam-client-analysis.md # Steam client analysis
-│   └── att-server-implementation.md  # ATT protocol details
-├── research/                    # Technical research documents
-│   ├── raw-l2cap-viability.md
-│   ├── debug-bluetoothd-analysis.md
-│   ├── att-mtu-failure-analysis.md
-│   ├── smp-pairing-bypass-bluez.md
-│   ├── smp-pairing-summary.md
-│   └── implementation-roadmap.md
+│   └── investigation-plan.md    # Investigation methodology
+├── research/
+│   ├── raw-l2cap-viability.md   # Why raw L2CAP works
+│   ├── debug-bluetoothd-analysis.md  # BlueZ GATT listener bug proof
+│   ├── att-mtu-failure-analysis.md   # ATT MTU root cause
+│   ├── smp-pairing-bypass-bluez.md   # SMP/ATT separation deep dive
+│   ├── implementation-roadmap.md     # Implementation plan (completed)
+│   ├── 32bit_ghidra_findings.md      # Ghidra analysis results
+│   ├── serial-format-analysis.md     # Serial validation analysis
+│   ├── steamclient-reverse-session/  # RE session data + functions/
+│   └── steamclient-reverse/          # Raw RE strings + reports
 ├── dbus-config/
 │   └── com.steamdeck.hogp.conf  # D-Bus system policy
 ├── src/
 │   ├── main_l2cap.py            # ★ ENTRYPOINT — raw L2CAP ATT server
 │   ├── att_server.py            # ★ Raw L2CAP ATT server
 │   ├── gatt_db.py               # ★ GATT database (85 attributes, 6 services)
+│   ├── input_handler.py         # Neptune HID → SC2 input mapping
 │   ├── agent.py                 # BlueZ Agent1 (auto-confirm)
 │   ├── adv.py                   # BLE advertisement
-│   ├── bluez.py                 # BlueZ D-Bus helpers
-│   ├── input_handler.py         # Xbox 360 → SC2 input mapping
+│   └── bluez.py                 # BlueZ D-Bus helpers
+├── deprecated/
 │   ├── main.py                  # DEPRECATED — uses BlueZ GATT (broken)
 │   └── gatt_app.py              # DEPRECATED — D-Bus GATT objects
 ├── scripts/
-│   ├── setup.sh                 # Deck setup script (first-time only)
-│   ├── deploy.sh                # Deploy source files + restart service
-│   ├── pair.py                  # Pexpect auto-pair (handles KDE dialog)
+│   ├── setup.sh                 # Deck setup (first time only)
+│   ├── deploy.sh                # Deploy source + restart service
 │   ├── diagnose.sh              # Full Deck status diagnostic
+│   ├── config_bt.py             # Configure BT adapter
+│   ├── extract_proto_trace.py   # Structured log parser
+│   ├── pair.py                  # Pexpect auto-pair (handles KDE dialog)
 │   ├── connect_deck.py          # BLE connection (subprocess-based)
 │   ├── bt_agent_pty.py          # PTY-based bluetoothctl agent
 │   ├── bt_agent.py              # D-Bus agent
 │   ├── bt_remove.py             # Remove BT device
-│   └── config_bt.py             # Configure BT adapter
-└── tests/                       # Test scripts
+│   ├── gdb_0x1d8_test.sh        # GDB test script (32-bit)
+│   └── capture_haptics.py       # Haptic capture script
+├── patches/
+│   └── check_static_addr.patch
+└── scratch/                     # Temporary captures (gitignored)
 ```

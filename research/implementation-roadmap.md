@@ -1,5 +1,7 @@
 # Implementation Roadmap: Custom ATT Server with BlueZ SMP
 
+> **STATUS: COMPLETED** — The ATT server is implemented in `src/att_server.py` and `src/main_l2cap.py`. This document is kept for historical reference.
+
 ## Overview
 
 This document provides a step-by-step implementation plan for creating a custom ATT server on the Steam Deck while keeping BlueZ for SMP pairing handling.
