@@ -33,7 +33,17 @@ Source `pii.env` for credentials before scripts.
 - Controller IS registered on host — serial "F0000-0000-00000000" accepted, configs loaded
 
 ### Not Working
-- **Steam-generated haptics** — Trackpad clicks, UI feedback haptics do NOT produce rumble. 0x8F never appears on BLE. Root cause verified: `[r15+0x208]` at `0x10d4da0` stays 0, gate skips 0x8F dispatch.
+- **Steam-generated haptics** — Trackpad clicks, UI feedback haptics do NOT produce rumble. 0x8F never appears on BLE.
+
+### ⚠️ CRITICAL: Wrong Binary Analyzed (2026-06-29)
+All binary analysis in this project was done on `linux64/steamclient.so` (46MB, 64-bit). **Steam loads `ubuntu12_32/steamclient.so` (49MB, 32-bit i386).** Every address, function offset, and disassembly from the RE sessions is WRONG for the running process. The conceptual findings (gate mechanism, YieldingRunTestProgram, job system) likely apply to both binaries, but every specific address must be re-derived from the 32-bit binary or verified via GDB.
+
+Evidence:
+- Steam process: ELF 32-bit LSB pie executable (i386)
+- YieldingRunTestProgram string: 32-bit=`0x00bfc7e3`, 64-bit=`0x00d6d17b`
+- Dispatcher at offset 0x015675a8: 32-bit=`in al,dx` (0xec), 64-bit=`push rbp` (0x55)
+
+**The GDB approach works on the running 32-bit process regardless of binary version.**
 
 ### What Was Fixed (2026-06-29)
 1. **Rumble format** — Fixed to match InputPlumber's PackedRumbleReport: `[0xeb, 0x09, 0x00, 0x00, 0x00, left_lo, left_hi, right_lo, right_hi]` padded to 64 bytes
@@ -116,30 +126,32 @@ Auto-Registering controller: F0000-0000-00000000, 12345678
 
 0x8F appears during initialization (positions 9,10 right after SET_SETTINGS) and during steady state.
 
-### Primary Hypothesis: `[r15+0x208]` Gate (VERIFIED)
+### Primary Hypothesis: `[r15+0x208]` Gate (VERIFIED in 64-bit binary, UNVERIFIED in 32-bit)
 
-**The gate at `0x10d4da0`:**
+**NOTE: All addresses below are from the 64-bit binary (`linux64/steamclient.so`). The 32-bit binary has different code at these offsets. The concepts are likely the same, but addresses must be re-derived.**
+
+**The gate at `0x10d4da0` (64-bit offset):**
 ```asm
 0x010d4da0: cmp byte [r15 + 0x208], 0    ; Check HID output path established flag
 0x010d4da8: movzx eax, byte [r15 + 0xe1]
 0x010d4db0: je 0x10d4fd0                ; If flag==0 → SKIP entire vtable dispatch
 ```
 
-**Only ONE instruction sets this flag to 1:**
+**Only ONE instruction sets this flag to 1 (64-bit offset):**
 ```
 0x0156781c: mov byte [r15+0x208], 1    ; in YieldingRunTestProgram
 ```
 
-**`YieldingRunTestProgram` at `0x015677f4` (VERIFIED):**
-1. Allocates 0x210-byte state machine object
-2. Calls `0x156d6a0` (HID device init)
-3. **Sets `[r15+0x208] = 1`** ← THE GATE
-4. Starts retry timer
-5. Registers with controller system
+**What we know (conceptual, applies to both binaries):**
+- YieldingRunTestProgram is a job in Steam's job system (job.cpp)
+- It spawns a subprocess and waits for it (60s timeout)
+- If it succeeds, [obj+0x208] = 1 (haptic gate opens)
+- If [obj+0x208] stays 0, 0x8F haptic commands are never dispatched
 
-**Why it doesn't run on BLE (UPDATED 2026-06-29 evening):** The function at `0x015675a8` (18,300 bytes, 52 basic blocks) is a **controller message dispatcher** that branches on `[rdi+0x1d8]`. If state is 1-2, it takes the path that includes `YieldingRunTestProgram`. If state is 3-4, it takes a different path. **However, the `[rdi+0x1d8]` theory is UNVERIFIED.** Recent investigation found that offset 0x1d8 is used in hundreds of places for different purposes. The value may be a **graphics API type** (1=GL, 2=Vulkan, 3=D3D12 path A, 4=D3D12 path B) written by shader compilation functions at `0x01559070`, NOT a controller state. Values 3 and 4 are NEVER written as immediate values to 0x1d8 — only 0, 1, 2, 0xFFFFFFFF, and 0x80000000. The BLE handler at `0x010c4e0c` sets `[r12+0x08] = 1` (BLE flag), but this byte is NEVER READ anywhere in the binary. The connection between the shader compilation path and the YieldingRunTestProgram path is unverified — a 5-minute GDB watchpoint would resolve this definitively.
-
-**IMPORTANT CLARIFICATION:** The `[reg+0x1b0] = 1` flag found at `0x15e2xxx` addresses is from SteamOS **update management** functions (YieldingCheckForUpdateBIOS, YieldingCheckForUpdateOS, BYieldingRunAPIJob, etc.) — completely unrelated to controllers. The `0x156d6a0` function they call is a **general-purpose job context allocator**, not HID-specific.
+**What we DON'T know (needs GDB on 32-bit process):**
+- Does the dispatcher run at all during BLE connection?
+- What value does [rdi+0x1d8] hold? (may be graphics API type, not controller state)
+- Is [0x208] ever set to 1 on BLE?
 
 ### ATT Write Response Format (VERIFIED WORKING)
 
@@ -164,10 +176,9 @@ ATT Write Response (0x13) is correct — single byte, standard BLE spec. BlueZ's
 
 ### What to Investigate Next
 
-1. **GDB watchpoint on [rdi+0x1d8] (RECOMMENDED NEXT STEP)** — Set a GDB watchpoint on the memory location `[rdi+0x1d8]` during BLE connection init. Observe what value is actually read by the dispatcher at `0x015675a8`. This resolves whether 0x1d8 is a controller state, graphics API type, or something else entirely. Takes 5 minutes vs hours of static analysis. **Meta-lesson: hours of static analysis produced contradictory findings; runtime verification via GDB is the definitive approach.**
-2. **LD_PRELOAD patch for 0x8F gate (AFTER GDB VERIFICATION)** — Patch `je 0x10d4fd0` at `0x10d4da6` to `nop nop` at runtime. This forces 0x8F dispatch regardless of `[r15+0x208]` gate. 55-65% probability of working. If it crashes, GDB watchpoint reveals what gate controls. If it works, Steam haptics (trackpad clicks, UI feedback) will flow to Neptune motors.
-3. **Why does Steam retry GET_SERIAL 19+ times on BLE?** Our handler returns valid response with 'F'-prefixed serial. Is Steam checking the write data hash? The native Deck write data has `01 05 12 00 00 02` at bytes 2-7, while BLE has `04 00 34 5e bc e8`. Steam might compute a hash from the write data and compare it to the response.
-4. **What triggers the call to `0x015675a8`?** It's invoked indirectly (no direct `call` in binary) — likely through a vtable dispatch set up during controller registration. What vtable entry does our BLE device use?
+1. **GDB watchpoint on running 32-bit Steam process (RECOMMENDED NEXT STEP)** — The 0x8F gate mechanism exists in the 32-bit binary but at different addresses. GDB works on the running process regardless. Set a breakpoint on the dispatcher (found via YieldingRunTestProgram string reference) and read [rdi+0x1d8] and [0x208]. This takes 5 minutes and gives definitive answers.
+2. **LD_PRELOAD patch for 0x8F gate (AFTER GDB VERIFICATION)** — Once the correct addresses are found in the 32-bit binary, patch the conditional jump to force 0x8F dispatch. 55-65% probability of working.
+3. **Why does Steam retry GET_SERIAL 19+ times on BLE?** Our handler returns valid response with 'F'-prefixed serial. Steam might compute a hash from the write data.
 
 ## Important Rules
 
@@ -224,19 +235,23 @@ The haptics path is `UHID_OUTPUT` → `forward_report()`, NOT `UHID_SET_REPORT` 
 
 ## Reference: Audit Findings (2026-06-29)
 
-### Verified Addresses
-| Address | Function/Label | Status |
-|---------|---------------|--------|
-| `0x015675a8` | Controller message dispatcher (18,300 bytes) | **VERIFIED** — branches on [rdi+0x1d8], but what 0x1d8 represents is UNVERIFIED (may be graphics API type, not controller state) |
-| `0x015677f4` | YieldingRunTestProgram job allocation point | **VERIFIED** — string at 0x00d6d17b, in job.cpp |
-| `0x0156781c` | `mov byte [r15+0x208], 1` | **VERIFIED** — the only write that enables 0x8F |
-| `0x010d4da0` | Gate check: `cmp byte [r15+0x208], 0` | **VERIFIED** |
-| `0x010d4e14` | vtable[0x10] dispatch | **VERIFIED** — trivial setter at 0x017605b0 |
-| `0x026b1ac0` | V_strncmp (serial validation) | **VERIFIED** — count=1, checks byte[0]=='F' |
-| `0x010c4e0c` | BLE handler sets [r12+0x08] = 1 | **VERIFIED** — but this flag is NEVER READ anywhere |
-| `0x01559070` | Writes [object+0x1d8] = graphics API type | **VERIFIED** — 1=GL, 2=Vulkan, 3/4=D3D12. BUT connection to 0x15675a8 dispatcher is UNVERIFIED |
+### ⚠️ All Addresses Below Are 64-bit Offsets (WRONG for Running Process)
 
-**Full analysis**: `research/steamclient-reverse-session/functions/yielding_run_test_program.c`
+These addresses are from `linux64/steamclient.so`. Steam loads `ubuntu12_32/steamclient.so`. The concepts are likely the same, but addresses must be re-derived from the 32-bit binary or verified via GDB.
+
+| 64-bit Offset | Function/Label | Status |
+|---------|---------------|--------|
+| `0x015675a8` | Dispatcher (18,300 bytes) | **VERIFIED in 64-bit** — but offset is WRONG in 32-bit |
+| `0x015677f4` | YieldingRunTestProgram | **VERIFIED in 64-bit** — string at 0x00d6d17b (64-bit), 0x00bfc7e3 (32-bit) |
+| `0x0156781c` | `mov byte [r15+0x208], 1` | **VERIFIED in 64-bit** — but offset is WRONG in 32-bit |
+| `0x010d4da0` | Gate check | **VERIFIED in 64-bit** — but offset is WRONG in 32-bit |
+
+### What's True Regardless of Binary
+- YieldingRunTestProgram is a job that spawns a subprocess and waits
+- If it succeeds, [obj+0x208] = 1 (haptic gate opens)
+- If [obj+0x208] stays 0, 0x8F is never dispatched
+- The handler's +0x08 BLE flag is NEVER READ (verified on 64-bit, likely same on 32-bit)
+- Values 3 and 4 are never statically written to offset 0x1d8
 
 ### Hallucinated Addresses (DO NOT USE)
 | File | Claimed | Actual | Issue |

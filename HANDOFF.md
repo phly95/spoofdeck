@@ -100,9 +100,12 @@ We present the **Steam Deck** as a **Steam Controller 2026 (SC2 / Triton)** over
 - **Status**: Cleared after host PC reboot. Same root cause as zombie disconnect — stale BlueZ state.
 
 ### 3. LD_PRELOAD Patch for Steam Haptics (REQUIRES GDB VERIFICATION FIRST)
-- **Status**: Root cause of gate mechanism verified (`[r15+0x208]` at `0x10d4da0` stays 0 on BLE). However, what `[rdi+0x1d8]` at the dispatcher `0x015675a8` represents is **UNVERIFIED** — may be graphics API type (1=GL, 2=Vulkan, 3/4=D3D12) instead of controller state. Values 3/4 never written as immediates. The BLE handler at `0x010c4e0c` sets `[r12+0x08] = 1` (BLE flag) but this byte is NEVER READ.
-- **Recommended next step**: GDB watchpoint on `[rdi+0x1d8]` during BLE connection init — 5-minute test vs hours of static analysis. **Meta-lesson: static analysis produced contradictory findings; runtime verification via GDB is the definitive approach.**
-- **After GDB verification**: Write a C library loaded via `LD_PRELOAD` that patches `je 0x10d4fd0` at `0x10d4da6` to `nop nop`, forcing 0x8F dispatch regardless of the gate.
+
+> **⚠️ NOTE: All binary addresses below are from the 64-bit binary. Steam loads the 32-bit binary. The LD_PRELOAD patch must target the 32-bit addresses.**
+
+- **Status**: Gate mechanism concept verified ([0x208] flag controls 0x8F dispatch). However, the specific addresses are from the WRONG binary (64-bit). The actual addresses in the running 32-bit process are unknown. The BLE handler at `0x010c4e0c` sets `[r12+0x08] = 1` (BLE flag) but this byte is NEVER READ.
+- **Recommended next step**: GDB watchpoint on running 32-bit Steam process to find the correct addresses for the dispatcher, gate check, and [0x1d8] value. 5-minute test vs hours of static analysis.
+- **After GDB verification**: Write a C library loaded via `LD_PRELOAD` that patches the conditional jump in the 32-bit binary.
 - **Probability**: 55-65% of working (after dispatcher path is verified). If crashes, GDB watchpoint reveals what gate controls.
 - **Evidence**: Native Deck strace shows 16× 0x8F in 124 HIDIOCSFEATURE calls. BLE shows 0× 0x8F. Connection drops after ~30s. ATT Write Response correct. GET_SERIAL retries 19+ times on BLE vs 4 on native. Controller IS registered.
 

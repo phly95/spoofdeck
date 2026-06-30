@@ -54,6 +54,8 @@ Deploy one change, capture results, evaluate. Don't add diagnostic logging AND f
 
 ## What We Don't Know
 
+> **⚠️ NOTE: All binary addresses below are from the 64-bit binary. Steam loads the 32-bit binary. Addresses must be re-derived or verified via GDB.**
+
 | Question | Current Best Guess | What Would Confirm/Refute |
 |----------|-------------------|--------------------------|
 | Why does Steam retry GET_SERIAL 19+ times on BLE? | Native and BLE send different serial hashes. Steam may compute a hash from the write data and compare it to the response. | Test with native serial hash format to see if retry count drops. |
