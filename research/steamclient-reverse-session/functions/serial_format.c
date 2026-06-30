@@ -83,21 +83,13 @@
  * REQUIREMENT: Serial must start with 'F' (0x46).
  * LENGTH: Up to 20 bytes (null-terminated string).
  *
- * Recommended format: "FBTW1-XXXXXXXX-XXXX" (exactly 20 chars)
+ * Recommended format: First byte 'F', remaining 19 bytes unknown.
+ * No real SC2 serials available for reference.
+ * The "BTW1" format is an unverified guess — use at your own risk.
  *
  * Breakdown:
  *   'F'        = Valve hardware serial prefix (passes V_strncmp)
- *   'BTW1'     = Bluetooth type indicator
- *   '-'        = separator
- *   'XXXXXXXX' = 8-char hex unique ID  
- *   '-'        = separator
- *   'XXXX'     = 4-char hex suffix
- *
- * Example serial: "FBTW1-AABBCCDD-1234"
- *
- * This matches the format of real SC2 BLE controller serials.
- * Real controllers use Valve-assigned serial numbers that all
- * start with 'F' (the Valve manufacturing prefix).
+ *   Rest       = Unknown without real device capture
  *
  * ============================================================
  * THE "Invalid or missing" LOG MESSAGE

@@ -76,9 +76,9 @@
  *   The serial MUST start with 'F' (0x46).
  *   Any 20-byte string starting with 'F' will pass V_strncmp.
  *
- * Real SC2 controllers use serials like:
- *   "FBTW1-XXXXXXXX-XXXX" (20 chars, Valve hardware serial format)
- *   The 'F' prefix is Valve's standard for manufactured hardware.
+ * Real SC2 controller serial format: UNKNOWN.
+ * Only requirement verified: First byte must be 'F' (0x46).
+ * No real SC2 device was available to capture serials.
  *
  * ============================================================
  * THE "Invalid or missing" LOG MESSAGE
@@ -113,12 +113,11 @@
  *
  * FIX: Change the serial in the GET_SERIAL response to start with 'F'.
  * 
- * Recommended format: "FBTW1-XXXXXXXX-XXXX" (20 chars)
- * - 'F' prefix passes V_strncmp validation
- * - "BTW1" = Bluetooth type indicator (matching real SC2 BLE controllers)
- * - XXXXXXXX-XXXX = unique identifier
+ * Required: First byte must be 'F' (0x46) to pass V_strncmp validation.
+ * Remaining 19 bytes: Format unknown without a real SC2 device to capture.
  *
- * Example: "FBTW1-AABBCCDD-1234" (20 bytes exactly)
+ * Recommendation: Use "F" + any 19 bytes. Test against Steam to see if
+ * secondary validation rejects it.
  *
  * Note: The full serial also needs to survive Steam's secondary validation
  * in CGetControllerInfoWorkItem::RunFunc. If Steam also checks the format
