@@ -468,6 +468,49 @@ This means:
 
 **Hypothesis**: Steam's HID output path (which sends 0x8F haptic commands) is only activated when the controller passes certain initialization checks. On BLE, these checks fail or stall, so the output path is never enabled. The gate at `[esi+0x17c]` may be in a code path that is never reached, not a gate that blocks 0x8F.
 
+### Init Chain Stall Analysis (2026-06-30 — from Ghidra decompilation + BlueZ source)
+
+**Verified init chain** (all addresses Ghidra-verified):
+```
+CHIDIOThread_Main (0x011b3a60) — creates worker threads, 0xc34-byte objects
+  → CWorkItemThread (0x011d5850) — processes HID read/write work items
+    → CGetControllerInfoWorkItem::RunFunc (0x01218840) — controller.cpp:0x14cf
+      → vtable[5](param_2, buffer) — calls SDL_hid_read_timeout
+      → Gets 0 bytes, sleeps 100ms, retries (iVar6++)
+      → After 51 retries (iVar6 == 0x33): "too many read failures"
+      → After timeout: "CGetControllerInfoWorkItem::RunFunc: timeout"
+    → EYldWaitForControllerDetails (0x011cee30)
+      → FUN_02ae47e0("EYldWaitForControllerDetails", 2000000, 0, 0)
+        → 2-second timeout (2,000,000 microseconds)
+        → Returns 1 (success), 2 (timeout), or 0x10 (error)
+```
+
+**Root cause**: CGetControllerInfoWorkItem reads from `/dev/hidrawN` via `SDL_hid_read_timeout` (vtable offset 0x14 on HID device object). It gets 0 bytes, retries 51 times (5.1 seconds), then fails. This means no input reports are available in the hidraw buffer during the first 5 seconds after BLE connection.
+
+**Notification pipeline** (traced from BlueZ 5.86 source `hog-lib.c` + `uhid.c`):
+```
+1. Our Python sends ATT Notification on handle 0x0012
+2. report_value_cb() (hog-lib.c:323) strips 3-byte ATT header
+3. bt_uhid_input(uhid, report->numbered ? report->id : 0, data, len) (uhid.c:464)
+4. If uhid->started is false: events QUEUED, not delivered to /dev/hidrawN
+5. When UHID_START received: queue flushed → delivered to /dev/hidrawN
+6. SDL_hid_read_timeout() reads from /dev/hidrawN
+```
+
+**The `uhid->started` gate (uhid.c:486-493)**: Notifications arriving before `UHID_START` are queued. They're flushed when `uhid_start()` fires (uhid.c:382). The `numbered` flag is set in `set_numbered()` based on `UHID_DEV_NUMBERED_INPUT_REPORTS` kernel flag.
+
+**Most likely cause of 0 bytes**: CGetControllerInfoWorkItem starts reading BEFORE notifications reach `/dev/hidrawN`. Possible reasons:
+1. Input handler hasn't started sending yet (Neptune device not available)
+2. CCCD writes haven't been processed (notification handles not registered)
+3. UHID_CREATE2 → UHID_START takes too long
+
+**What we know works**: KDE detects the gamepad, game rumble flows. So the notification pipeline DOES work eventually. The issue is timing during the first 5 seconds.
+
+**Next steps for hardware testing**:
+1. Check `controller.txt` in `~/.steam/steam/logs/` for CGetControllerInfoWorkItem error messages
+2. Run `btmon -t -w /tmp/btmon.log` during BLE connection to capture ATT timing
+3. Add burst notifications on connection to pre-fill UHID queue
+
 ---
 
 ## Implementation Order

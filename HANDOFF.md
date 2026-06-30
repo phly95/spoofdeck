@@ -113,18 +113,27 @@ Ghidra 11.3.1 installed at `~/ghidra`. Projects saved at `~/ghidra-projects/spoo
 
 **Key findings from decompiled C:**
 
-1. **Haptics root cause clarified**: The 0x8F TRIGGER_HAPTIC_PULSE command is never dispatched on BLE because the *entire initialization chain* stalls. The gate at `[esi+0x17c]` is not the direct blocker — the code that checks it is never reached. The initialization chain is:
+1. **Haptics root cause identified**: `CGetControllerInfoWorkItem::RunFunc` (0x01218840) calls `SDL_hid_read_timeout` via vtable[5] and gets **0 bytes**. It retries 51 times × 100ms = 5.1 seconds, then fails with "too many read failures." The entire init chain stalls here:
    ```
    CHIDIOThread_Main (0x011b3a60)
      → CWorkItemThread (0x011d5850)
-       → CGetControllerInfoWorkItem (0x01218840, retries 51x)
+       → CGetControllerInfoWorkItem (0x01218840) — STALLS HERE
          → EYldWaitForControllerDetails (0x011cee30, 2s timeout)
-           → gate SET at 0x0178a140
+           → gate SET at 0x0178a140 — NEVER REACHED
    ```
 
-2. **SDL configuration**: Steam loads `libSDL3.so.0` at runtime and sets `SDL_JOYSTICK_HIDAPI_STEAM=1`. This means Steam uses SDL3's HIDAPI driver for Steam controllers, bypassing the kernel's `hid-steam` driver.
+2. **Notification pipeline traced** (from BlueZ 5.86 `hog-lib.c` + `uhid.c`):
+   ```
+   Our ATT Notification → report_value_cb() → bt_uhid_input()
+     → UHID_INPUT2 → kernel HID core → /dev/hidrawN → SDL_hid_read_timeout
+   ```
+   The `uhid->started` flag gates delivery: events arriving before UHID_START are queued, then flushed.
 
-3. **12 new verified function addresses** — see `research/32bit_ghidra_findings.md` for the full map.
+3. **Why 0 bytes**: CGetControllerInfoWorkItem reads BEFORE notifications reach `/dev/hidrawN`. The pipeline works eventually (KDE detects gamepad, game rumble flows), but not within the 5.1-second window.
+
+4. **SDL configuration**: Steam loads `libSDL3.so.0` and sets `SDL_JOYSTICK_HIDAPI_STEAM=1`.
+
+5. **12 new verified function addresses** — see `research/32bit_ghidra_findings.md` for the full map.
 
 **Exported data** at `~/ghidra-projects/exports/32bit/`:
 - `functions.csv` — 141,351 functions

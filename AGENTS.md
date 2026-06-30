@@ -105,7 +105,7 @@ Make a **Steam Deck** present itself as a **Steam Controller 2026 (SC2)** over *
 ### What Needs to Happen Next
 
 1. ~~**⚠️ CRITICAL: ALL PRIOR BINARY ANALYSIS WAS ON THE WRONG BINARY**~~ — **RESOLVED (2026-06-30)**. All RE analysis files updated to use 32-bit (`ubuntu12_32/steamclient.so`) addresses. 56 files changed, 1424 insertions, 1345 deletions. 52 string addresses verified, 26 function addresses marked `[NEEDS RE-ANALYSIS]`.
-2. **GDB watchpoint to verify 0x1d8 value (RECOMMENDED NEXT STEP)** — The 0x8F gate at `[esi+0x17c]` is confirmed in the 32-bit binary, but the entire command dispatch path is never entered on BLE. Use GDB to trace the HID initialization chain (CHIDIOThread → CGetControllerInfoWorkItem → EYldWaitForControllerDetails) to find where it stalls.
+2. **GDB on host Steam process (RECOMMENDED NEXT STEP)** — Breakpoint on `CGetControllerInfoWorkItem::RunFunc` (0x01218840) to see what `SDL_hid_read_timeout` returns. This will confirm whether the HID read gets 0 bytes (timing issue) or wrong data (format issue). Alternative: capture Steam's controller.txt logs and btmon ATT traffic during BLE connection.
 3. **LD_PRELOAD patch for 0x8F gate (AFTER INITIALIZATION FIX)** — The gate CHECK at `0x0123e5fa` can be patched, but only after the initialization chain is fixed to actually reach that code path. 55-65% probability of working once the chain is unblocked.
 2. **ATT Server Spec Compliance** — Implement one at a time, test each:
    - Read Blob error code (0x01 → 0x07)
