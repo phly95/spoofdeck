@@ -1,14 +1,14 @@
 /*
  * Handshake Completion Analysis — Does It Complete Despite Retries?
  *
- * Binary: ~/.steam/debian-installation/linux64/steamclient.so
+ * Binary: ~/.steam/debian-installation/ubuntu12_32/steamclient.so (32-bit, 49MB)
  * Status: DETERMINED
  */
 
 ⚠️ DISCLAIMER: WRONG BINARY ANALYZED
 
 All analysis in this file was performed on the WRONG binary:
-  ~/.steam/debian-installation/linux64/steamclient.so (46MB, 64-bit x86_64)
+  ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit) [CORRECT]
 
 Steam actually loads:
   ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit i386)
@@ -29,11 +29,11 @@ Verified: 2026-06-29
  *
  * YES, the handshake completes despite SET_SETTINGS retries.
  *
- * The SET_SETTINGS retry loop runs in the state machine (0x010d466b)
+ * The SET_SETTINGS retry loop runs in the state machine (0x010d466b [32-bit: NEEDS RE-ANALYSIS])
  * which is a SEPARATE path from the controller registration flow.
  * The registration flow completes via:
- *   1. EYldWaitForControllerDetails (0x01071c70)
- *   2. QueueFetchingControllerDetails (0x01092820)
+ *   1. EYldWaitForControllerDetails (0x01071c70 [32-bit: NEEDS RE-ANALYSIS])
+ *   2. QueueFetchingControllerDetails (0x01092820 [32-bit: NEEDS RE-ANALYSIS])
  *   3. BYieldingCompleteSteamControllerRegistration
  *
  * These functions check the ControllerDetails ready_flag at offset 0x3c,
@@ -44,13 +44,13 @@ Verified: 2026-06-29
 /*
  * === REGISTRATION FLOW ===
  *
- * 1. EYldWaitForControllerDetails (0x01071c70)
+ * 1. EYldWaitForControllerDetails (0x01071c70 [32-bit: NEEDS RE-ANALYSIS])
  *    - Waits for controller details to be populated
  *    - Uses 2-second timeout (0x1e8480 microseconds)
  *    - Checks ready_flag at offset 0x3c
  *    - If ready_flag == 1, proceeds to registration
  *
- * 2. QueueFetchingControllerDetails (0x01092820)
+ * 2. QueueFetchingControllerDetails (0x01092820 [32-bit: NEEDS RE-ANALYSIS])
  *    - Copies 0x54-byte ControllerDetails to controller slot
  *    - Checks ready_flag at [rsi+0x3c]
  *    - If ready_flag != 0, jumps to completion path (0x10929f0)
@@ -68,18 +68,18 @@ Verified: 2026-06-29
 /*
  * === READY FLAG CHECKS ===
  *
- * The caller at 0x010b2ca0 checks TWO flags:
+ * The caller at 0x010b2ca0 [32-bit: NEEDS RE-ANALYSIS] checks TWO flags:
  *
- *   0x010b2d4c: movzx eax, byte [rdi+0x28]  ; primary readiness
- *   0x010b2d50: test al, al
- *   0x010b2d52: je 0x10b2d61                 ; skip if not ready
+ *   0x010b2d4c [32-bit: NEEDS RE-ANALYSIS]: movzx eax, byte [rdi+0x28]  ; primary readiness
+ *   0x010b2d50 [32-bit: NEEDS RE-ANALYSIS]: test al, al
+ *   0x010b2d52 [32-bit: NEEDS RE-ANALYSIS]: je 0x10b2d61                 ; skip if not ready
  *
- *   0x010b2d54: cmp byte [rdi+0x80], 0       ; secondary completion
- *   0x010b2d5b: jne 0x10b2e98                ; if set, success path
+ *   0x010b2d54 [32-bit: NEEDS RE-ANALYSIS]: cmp byte [rdi+0x80], 0       ; secondary completion
+ *   0x010b2d5b [32-bit: NEEDS RE-ANALYSIS]: jne 0x10b2e98                ; if set, success path
  *
  * In QueueFetchingControllerDetails:
- *   0x010928ad: cmp byte [rsi+0x3c], 0       ; ready_flag
- *   0x010928b1: jne 0x10929f0                ; if != 0, completion path
+ *   0x010928ad [32-bit: NEEDS RE-ANALYSIS]: cmp byte [rsi+0x3c], 0       ; ready_flag
+ *   0x010928b1 [32-bit: NEEDS RE-ANALYSIS]: jne 0x10929f0                ; if != 0, completion path
  *
  * These flags are set by the controller firmware responding to
  * GET_ATTRIBUTES/0xf2/GET_SERIAL — NOT by SET_SETTINGS.
@@ -88,13 +88,13 @@ Verified: 2026-06-29
 /*
  * === SET_SETTINGS RETRY IS NOISE ===
  *
- * The SET_SETTINGS retry loop runs in the state machine at 0x010d466b.
+ * The SET_SETTINGS retry loop runs in the state machine at 0x010d466b [32-bit: NEEDS RE-ANALYSIS].
  * This is a SEPARATE execution context from the registration flow:
  *
  * - Registration: EYldWaitForControllerDetails → QueueFetchingControllerDetails
  * - SET_SETTINGS: State machine → vtable[0x10] → retry
  *
- * The state machine processes settings entries at [r15+0xc0].
+ * The state machine processes settings entries at [esi+0xc0].
  * The registration flow checks ControllerDetails at [rsi+0x3c].
  * These are DIFFERENT data structures accessed by DIFFERENT functions.
  *
@@ -105,12 +105,12 @@ Verified: 2026-06-29
 /*
  * === THREAD MODEL ===
  *
- * The state machine at 0x010d466b is likely called from a worker thread
+ * The state machine at 0x010d466b [32-bit: NEEDS RE-ANALYSIS] is likely called from a worker thread
  * (CHIDIOThread or similar). The registration flow runs on the main
  * thread or a yield thread. They execute independently.
  *
  * Evidence:
- * - "CSteamController::CHIDIOThread" at 0x00d6fbc2
+ * - "CSteamController::CHIDIOThread" at 0x00b9994a
  * - "CSteamController::CHIDIOThread::CWorkItemThread" at 0x00d73b6a
  * - Work items include: SetUserLedColor, ResetLedColor, TurnOffController
  *
@@ -143,13 +143,13 @@ Verified: 2026-06-29
 /*
  * === BINARY REFERENCES ===
  *
- * EYldWaitForControllerDetails: 0x01071c70
- * QueueFetchingControllerDetails: 0x01092820
- * Caller of QueueFetchingControllerDetails: 0x010b2ca0
- * State machine: 0x010d466b
- * SET_SETTINGS queue: 0x010d5488
- * Ready flag check: 0x010928ad (cmp byte [rsi+0x3c], 0)
- * Registration completion: 0x010929f0
- * CHIDIOThread string: 0x00d6fbc2
- * BYieldingCompleteSteamControllerRegistration strings: 0x00cc65d8, 0x00d17710, 0x00d526e8
+ * EYldWaitForControllerDetails: 0x01071c70 [32-bit: NEEDS RE-ANALYSIS]
+ * QueueFetchingControllerDetails: 0x01092820 [32-bit: NEEDS RE-ANALYSIS]
+ * Caller of QueueFetchingControllerDetails: 0x010b2ca0 [32-bit: NEEDS RE-ANALYSIS]
+ * State machine: 0x010d466b [32-bit: NEEDS RE-ANALYSIS]
+ * SET_SETTINGS queue: 0x010d5488 [32-bit: NEEDS RE-ANALYSIS]
+ * Ready flag check: 0x010928ad [32-bit: NEEDS RE-ANALYSIS] (cmp byte [rsi+0x3c], 0)
+ * Registration completion: 0x010929f0 [32-bit: NEEDS RE-ANALYSIS]
+ * CHIDIOThread string: 0x00b9994a
+ * BYieldingCompleteSteamControllerRegistration strings: 0x00cc65d8, 0x00b9b7a3, 0x00d526e8
  */

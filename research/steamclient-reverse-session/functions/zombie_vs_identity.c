@@ -1,14 +1,14 @@
 /*
  * Zombie Check vs Identity Check — Same Function, Different Callers
  *
- * Binary: ~/.steam/debian-installation/linux64/steamclient.so
+ * Binary: ~/.steam/debian-installation/ubuntu12_32/steamclient.so (32-bit, 49MB)
  * Status: DETERMINED
  */
 
 ⚠️ DISCLAIMER: WRONG BINARY ANALYZED
 
 All analysis in this file was performed on the WRONG binary:
-  ~/.steam/debian-installation/linux64/steamclient.so (46MB, 64-bit x86_64)
+  ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit) [CORRECT]
 
 Steam actually loads:
   ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit i386)
@@ -44,8 +44,8 @@ Verified: 2026-06-29
  *
  * The slot iterator iterates 16 controller slots (0-15):
  *
- * 0x1072070: add rbx, 1          ; next slot
- * 0x1072074: cmp rbx, 0x10       ; done with all 16?
+ * 0x1072070: add ebx, 1          ; next slot
+ * 0x1072074: cmp ebx, 0x10       ; done with all 16?
  * 0x1072078: je 0x10720c0        ; → exit loop
  *
  * For each slot:

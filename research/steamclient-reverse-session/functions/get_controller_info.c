@@ -1,8 +1,8 @@
 /*
  * CGetControllerInfoWorkItem::RunFunc — Complete Analysis
  *
- * Binary: ~/.steam/debian-installation/linux64/steamclient.so
- * Function VA: 0x010a3800
+ * Binary: ~/.steam/debian-installation/ubuntu12_32/steamclient.so (32-bit, 49MB)
+ * Function VA: 0x010a3800 [32-bit: NEEDS RE-ANALYSIS]
  * Source: /data/src/clientdll/controller.cpp
  * Status: DETERMINED
  */
@@ -10,7 +10,7 @@
 ⚠️ DISCLAIMER: WRONG BINARY ANALYZED
 
 All analysis in this file was performed on the WRONG binary:
-  ~/.steam/debian-installation/linux64/steamclient.so (46MB, 64-bit x86_64)
+  ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit) [CORRECT]
 
 Steam actually loads:
   ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit i386)
@@ -69,65 +69,65 @@ Verified: 2026-06-29
  */
 
 /*
- * === DISASSEMBLY (0x010a3800) ===
+ * === DISASSEMBLY (0x010a3800 [32-bit: NEEDS RE-ANALYSIS]) ===
  *
  * rdi = this (CGetControllerInfoWorkItem*)
  * rsi = controller (IController* with vtable)
  *
- * 0x010a3800: push rbx/rbp/r12-r15
- * 0x010a380e: test rsi, rsi           ; if (controller == NULL) return
- * 0x010a3811: je 0x10a38b3
+ * 0x010a3800 [32-bit: NEEDS RE-ANALYSIS]: push ebx/rbp/r12-esi
+ * 0x010a380e [32-bit: NEEDS RE-ANALYSIS]: test rsi, rsi           ; if (controller == NULL) return
+ * 0x010a3811 [32-bit: NEEDS RE-ANALYSIS]: je 0x10a38b3
  *
- * 0x010a3817: lea rax, [0x02c396f0]  ; timeout config value
- * 0x010a3824: xor r12d, r12d         ; retry_count = 0
- * 0x010a3834: lea r14, [rbx+0x84]    ; read buffer at this+0x84
- * 0x010a383b: imul r13, [rax], 0x989680  ; timeout_value * 10,000,000
- * 0x010a384b: call fcn.026d7e80      ; get current time
- * 0x010a3850: shr r13, 0x12          ; convert to seconds
- * 0x010a3854: add r13, rax           ; deadline = current + timeout
+ * 0x010a3817 [32-bit: NEEDS RE-ANALYSIS]: lea rax, [0x02c396f0 [32-bit: NEEDS RE-ANALYSIS]]  ; timeout config value
+ * 0x010a3824 [32-bit: NEEDS RE-ANALYSIS]: xor r12d, r12d         ; retry_count = 0
+ * 0x010a3834 [32-bit: NEEDS RE-ANALYSIS]: lea r14, [ebx+0x84]    ; read buffer at this+0x84
+ * 0x010a383b [32-bit: NEEDS RE-ANALYSIS]: imul r13, [rax], 0x989680  ; timeout_value * 10,000,000
+ * 0x010a384b [32-bit: NEEDS RE-ANALYSIS]: call fcn.026d7e80      ; get current time
+ * 0x010a3850 [32-bit: NEEDS RE-ANALYSIS]: shr r13, 0x12          ; convert to seconds
+ * 0x010a3854 [32-bit: NEEDS RE-ANALYSIS]: add r13, rax           ; deadline = current + timeout
  *
  * ; === READ LOOP ===
- * 0x010a3860: mov rax, [rbp]         ; load vtable
- * 0x010a3864: mov rsi, r14           ; buffer = this+0x84
- * 0x010a3867: mov rdi, rbp           ; this = controller
- * 0x010a386a: call [rax+0x28]        ; *** VTABLE CALL: DeviceRead() ***
- * 0x010a386d: test eax, eax
- * 0x010a386f: setg [rbx+0x80]       ; success_flag = (return > 0)
- * 0x010a3876: cmp eax, -1
- * 0x010a3879: je 0x10a38b3          ; if return == -1, exit (hard error)
- * 0x010a387b: test eax, eax
- * 0x010a387d: jle 0x10a38e0         ; if return <= 0, goto SLEEP/RETRY
+ * 0x010a3860 [32-bit: NEEDS RE-ANALYSIS]: mov rax, [rbp]         ; load vtable
+ * 0x010a3864 [32-bit: NEEDS RE-ANALYSIS]: mov rsi, r14           ; buffer = this+0x84
+ * 0x010a3867 [32-bit: NEEDS RE-ANALYSIS]: mov rdi, rbp           ; this = controller
+ * 0x010a386a [32-bit: NEEDS RE-ANALYSIS]: call [rax+0x28]        ; *** VTABLE CALL: DeviceRead() ***
+ * 0x010a386d [32-bit: NEEDS RE-ANALYSIS]: test eax, eax
+ * 0x010a386f [32-bit: NEEDS RE-ANALYSIS]: setg [ebx+0x80]       ; success_flag = (return > 0)
+ * 0x010a3876 [32-bit: NEEDS RE-ANALYSIS]: cmp eax, -1
+ * 0x010a3879 [32-bit: NEEDS RE-ANALYSIS]: je 0x10a38b3          ; if return == -1, exit (hard error)
+ * 0x010a387b [32-bit: NEEDS RE-ANALYSIS]: test eax, eax
+ * 0x010a387d [32-bit: NEEDS RE-ANALYSIS]: jle 0x10a38e0         ; if return <= 0, goto SLEEP/RETRY
  *
  * ; === SUCCESS PATH (return > 0) ===
- * 0x010a387f: cmp r12d, 0x32        ; if retry_count == 50
- * 0x010a3883: jne 0x10a38a5         ;   goto deadline check
- * 0x010a3885: lea rdx, "too many read failures"
- * 0x010a3898: call fcn.026cdc00     ; warning/assertion
+ * 0x010a387f [32-bit: NEEDS RE-ANALYSIS]: cmp r12d, 0x32        ; if retry_count == 50
+ * 0x010a3883 [32-bit: NEEDS RE-ANALYSIS]: jne 0x10a38a5         ;   goto deadline check
+ * 0x010a3885 [32-bit: NEEDS RE-ANALYSIS]: lea rdx, "too many read failures"
+ * 0x010a3898 [32-bit: NEEDS RE-ANALYSIS]: call fcn.026cdc00     ; warning/assertion
  *
  * ; === DEADLINE CHECK ===
- * 0x010a38a5: call fcn.026d7e80     ; get current time
- * 0x010a38aa: cmp r13, rax          ; deadline <= current?
- * 0x010a38ad: jle 0x10a39b6        ; if expired, goto TIMEOUT
- * 0x010a38b3: ...                   ; NORMAL EXIT
+ * 0x010a38a5 [32-bit: NEEDS RE-ANALYSIS]: call fcn.026d7e80     ; get current time
+ * 0x010a38aa [32-bit: NEEDS RE-ANALYSIS]: cmp r13, rax          ; deadline <= current?
+ * 0x010a38ad [32-bit: NEEDS RE-ANALYSIS]: jle 0x10a39b6        ; if expired, goto TIMEOUT
+ * 0x010a38b3 [32-bit: NEEDS RE-ANALYSIS]: ...                   ; NORMAL EXIT
  *
  * ; === SLEEP / RETRY PATH ===
- * 0x010a38e0: mov edi, 0x64         ; sleep = 100ms
- * 0x010a38e5: add r12d, 1          ; retry_count++
- * 0x010a38e9: call Sleep(100ms)
- * 0x010a3944: lea rax, "Read failure.\n"
- * 0x010a3967: call LogMsg
- * 0x010a396c: cmp r12d, 0x33       ; if retry_count == 51
- * 0x010a3970: je 0x10a3885        ;   goto "too many failures"
- * 0x010a3976: cmp [rbx+0x80], 0   ; was previous read successful?
- * 0x010a397d: jne 0x10a38a5       ; if yes, exit (keep result)
- * 0x010a399a: call fcn.026d7e80   ; get current time
- * 0x010a399f: cmp r13, rax        ; deadline expired?
- * 0x010a39a2: jg 0x10a3860        ; no → RETRY LOOP
+ * 0x010a38e0 [32-bit: NEEDS RE-ANALYSIS]: mov edi, 0x64         ; sleep = 100ms
+ * 0x010a38e5 [32-bit: NEEDS RE-ANALYSIS]: add r12d, 1          ; retry_count++
+ * 0x010a38e9 [32-bit: NEEDS RE-ANALYSIS]: call Sleep(100ms)
+ * 0x010a3944 [32-bit: NEEDS RE-ANALYSIS]: lea rax, "Read failure.\n"
+ * 0x010a3967 [32-bit: NEEDS RE-ANALYSIS]: call LogMsg
+ * 0x010a396c [32-bit: NEEDS RE-ANALYSIS]: cmp r12d, 0x33       ; if retry_count == 51
+ * 0x010a3970 [32-bit: NEEDS RE-ANALYSIS]: je 0x10a3885        ;   goto "too many failures"
+ * 0x010a3976 [32-bit: NEEDS RE-ANALYSIS]: cmp [ebx+0x80], 0   ; was previous read successful?
+ * 0x010a397d [32-bit: NEEDS RE-ANALYSIS]: jne 0x10a38a5       ; if yes, exit (keep result)
+ * 0x010a399a [32-bit: NEEDS RE-ANALYSIS]: call fcn.026d7e80   ; get current time
+ * 0x010a399f [32-bit: NEEDS RE-ANALYSIS]: cmp r13, rax        ; deadline expired?
+ * 0x010a39a2 [32-bit: NEEDS RE-ANALYSIS]: jg 0x10a3860        ; no → RETRY LOOP
  *                                 ; yes → fall through to TIMEOUT
  *
  * ; === TIMEOUT PATH ===
- * 0x010a39b6: lea rax, "timeout"
- * 0x010a3a32: jmp 0x10a38b3       ; exit
+ * 0x010a39b6 [32-bit: NEEDS RE-ANALYSIS]: lea rax, "timeout"
+ * 0x010a3a32 [32-bit: NEEDS RE-ANALYSIS]: jmp 0x10a38b3       ; exit
  */
 
 /*
@@ -139,7 +139,7 @@ Verified: 2026-06-29
  * Sleep between retries:      100ms (0x64)
  * Read buffer offset:         this+0x84
  * Success flag offset:        this+0x80
- * Timeout config address:     0x02c396f0
+ * Timeout config address:     0x02c396f0 [32-bit: NEEDS RE-ANALYSIS]
  * Timeout value:              ~20 seconds (computed via magic number division)
  */
 
@@ -192,7 +192,7 @@ Verified: 2026-06-29
  *    The code checks request_id matching and result == 0.
  *
  * 4. TIMEOUT: No response within ~20 seconds. The deadline is computed
- *    from the timeout config value at 0x02c396f0.
+ *    from the timeout config value at 0x02c396f0 [32-bit: NEEDS RE-ANALYSIS].
  *
  * In the user's case (SC2 BLE), the likely cause is:
  *   - The BLE controller doesn't respond to DeviceRead requests
@@ -234,16 +234,16 @@ Verified: 2026-06-29
 /*
  * === BINARY REFERENCES ===
  *
- * Function VA:               0x010a3800
+ * Function VA:               0x010a3800 [32-bit: NEEDS RE-ANALYSIS]
  * RTTI type name:            0x00aa1a60 ("26CGetControllerInfoWorkItem")
  * RTTI type info:            0x0008dac0
- * "Read failure" string:     0x00d22f30
- * "too many read failures":  0x00d052c8
+ * "Read failure" string:     0x00b991d5
+ * "too many read failures":  0x00b99209
  * "timeout" string:          0x00d12f48
  * "GetControllerInfo failed": 0x00c8f560
- * Timeout config:            0x02c396f0
+ * Timeout config:            0x02c396f0 [32-bit: NEEDS RE-ANALYSIS]
  * IPC pipe source:           0x00c8ce80 (hiddevicepipesteam.cpp)
- * CHIDMessageToRemote:       0x00b3ead7
- * DeviceRead tag:            0x00b3fb42
- * RequestResponse tag:       0x00b3fba8
+ * CHIDMessageToRemote:       0x00c94ef7
+ * DeviceRead tag:            0x00c94ff6
+ * RequestResponse tag:       0x00c95090
  */

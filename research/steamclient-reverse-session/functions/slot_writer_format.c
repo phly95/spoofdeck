@@ -1,7 +1,7 @@
 /*
  * Slot Writer Response Format — What Format Does the Processing Code Expect?
  *
- * Binary: ~/.steam/debian-installation/linux64/steamclient.so
+ * Binary: ~/.steam/debian-installation/ubuntu12_32/steamclient.so (32-bit, 49MB)
  * Status: DETERMINED (from binary analysis + SDL3 source)
  *
  * THE RESPONSE FORMAT
@@ -131,7 +131,7 @@
 ⚠️ DISCLAIMER: WRONG BINARY ANALYZED
 
 All analysis in this file was performed on the WRONG binary:
-  ~/.steam/debian-installation/linux64/steamclient.so (46MB, 64-bit x86_64)
+  ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit) [CORRECT]
 
 Steam actually loads:
   ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit i386)

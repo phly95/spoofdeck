@@ -178,7 +178,7 @@ The zombie disconnect is state-based, not time-based:
 - Slot state == 3, per-slot flag at 0x10b4 == 0, connection state != 1 && != 4
 - 6-second interval is the polling frequency of the slot iterator
 
-Binary: ~/.steam/debian-installation/linux64/steamclient.so
+Binary: ~/.steam/debian-installation/ubuntu12_32/steamclient.so
 
 ## What You Must Find
 

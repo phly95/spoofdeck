@@ -1,7 +1,7 @@
 /*
  * BYieldingRegisterSteamController — Registration Requirements
  *
- * Binary: ~/.steam/debian-installation/linux64/steamclient.so
+ * Binary: ~/.steam/debian-installation/ubuntu12_32/steamclient.so (32-bit, 49MB)
  * Function VA: 0x10b3a60
  * Status: DETERMINED
  */
@@ -9,7 +9,7 @@
 ⚠️ DISCLAIMER: WRONG BINARY ANALYZED
 
 All analysis in this file was performed on the WRONG binary:
-  ~/.steam/debian-installation/linux64/steamclient.so (46MB, 64-bit x86_64)
+  ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit) [CORRECT]
 
 Steam actually loads:
   ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit i386)
@@ -66,7 +66,7 @@ Verified: 2026-06-29
  *
  * 0x10b3a60: push rbp
  * 0x10b3a61: mov rbp, rsp
- * 0x10b3a64: push r15/r14/r13/r12/rbx
+ * 0x10b3a64: push esi/r14/r13/r12/ebx
  * 0x10b3a73: sub rsp, 0x2c8
  *
  * ; Check controller ID
@@ -150,18 +150,18 @@ Verified: 2026-06-29
  * 0x00cce280: "BYieldingRegisterSteamController"
  * 0x00cd4dc0: "BYieldingRegisterSteamController - couldn't get identity before registration."
  * 0x00cf82b8: "BYieldingRegisterSteamController - Error committing registration of controller & account pair - controller disconnected."
- * 0x00d56bf0: "BYieldingRegisterSteamController - controller changed before registration."
- * 0x00d58300: "BYieldingRegisterSteamController - Error committing registration of controller & account pair: %s"
+ * 0x00b9b9eb: "BYieldingRegisterSteamController - controller changed before registration."
+ * 0x00b9b86f: "BYieldingRegisterSteamController - Error committing registration of controller & account pair: %s"
  * 0x00d62d30: "BYieldingRegisterSteamController - timed out"
- * 0x00d66aa8: "BYieldingRegisterSteamController - controller disconnected while waiting."
- * 0x00d88ff0: "BYieldingRegisterSteamController - Error querying accounts registered to controller. Will Try Local Cache!"
+ * 0x00b98b53: "BYieldingRegisterSteamController - controller disconnected while waiting."
+ * 0x00b98bd7: "BYieldingRegisterSteamController - Error querying accounts registered to controller. Will Try Local Cache!"
  *
- * 0x00d17710: "BYieldingCompleteSteamControllerRegistration - controller changed before completing registration."
- * 0x00d263d0: "BYieldingCompleteSteamControllerRegistration - couldn't get controller identity."
- * 0x00d17e00: "BYieldingCompleteSteamControllerRegistration - Error committing registration completion of controller & account pair: %s %s %s"
+ * 0x00b9b7a3: "BYieldingCompleteSteamControllerRegistration - controller changed before completing registration."
+ * 0x00b9b74f: "BYieldingCompleteSteamControllerRegistration - couldn't get controller identity."
+ * 0x00b9b86f: "BYieldingCompleteSteamControllerRegistration - Error committing registration completion of controller & account pair: %s %s %s"
  * 0x00cc65d8: "BYieldingCompleteSteamControllerRegistration - Error committing registration completion of controller & account pair - controller disconnected: %s"
  *
- * 0x00d41760: "AccountHardware.RegisterSteamController#1"
+ * 0x00b9ba50: "AccountHardware.RegisterSteamController#1"
  * 0x00ce2dc8: "AccountHardware.CompleteSteamControllerRegistration#1"
  */
 

@@ -1,7 +1,7 @@
 ⚠️ DISCLAIMER: WRONG BINARY ANALYZED
 
 All analysis in this file was performed on the WRONG binary:
-  ~/.steam/debian-installation/linux64/steamclient.so (46MB, 64-bit x86_64)
+  ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit) [CORRECT]
 
 Steam actually loads:
   ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit i386)
@@ -19,8 +19,8 @@ Verified: 2026-06-29
 # QueueFetchingControllerDetails Function
 
 ## Location
-- Binary: `~/.steam/debian-installation/linux64/steamclient.so`
-- Function start: `0x01092820` (within `Steam_GSGetSteamID + 0xa10e0`)
+- Binary: `~/.steam/debian-installation/ubuntu12_32/steamclient.so` (32-bit, 49MB) [CORRECT]
+- Function start: `0x01092820 [32-bit: NEEDS RE-ANALYSIS]` (within `Steam_GSGetSteamID + 0xa10e0`)
 - String reference: `QueueFetchingControllerDetails` at vaddr `0x00c8a7f0`
 
 ## Pseudocode

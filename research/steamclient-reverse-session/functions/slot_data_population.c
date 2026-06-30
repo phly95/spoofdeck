@@ -1,7 +1,7 @@
 /*
  * Slot Data Population Analysis — What Populates controller+slot*0xe8+0x200
  *
- * Binary: ~/.steam/debian-installation/linux64/steamclient.so
+ * Binary: ~/.steam/debian-installation/ubuntu12_32/steamclient.so (32-bit, 49MB)
  * Status: DETERMINED
  *
  * CRITICAL FINDING: There are TWO DIFFERENT data structures that are often confused:
@@ -25,7 +25,7 @@
 ⚠️ DISCLAIMER: WRONG BINARY ANALYZED
 
 All analysis in this file was performed on the WRONG binary:
-  ~/.steam/debian-installation/linux64/steamclient.so (46MB, 64-bit x86_64)
+  ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit) [CORRECT]
 
 Steam actually loads:
   ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit i386)
@@ -98,25 +98,25 @@ Verified: 2026-06-29
  *
  * ; SUCCESS PATH (0x10708a0):
  * 0x10708a0: mov edx, [rax+0x1f8]        ; product_id from slot+0x1f8
- * 0x10708b2: mov [rbx], edx              ; output[0x00] = product_id
+ * 0x10708b2: mov [ebx], edx              ; output[0x00] = product_id
  * 0x10708b4: mov eax, [rax+0x1fc]        ; secondary_id from slot+0x1fc
- * 0x10708c2: mov [rbx+4], eax            ; output[0x04] = secondary_id
+ * 0x10708c2: mov [ebx+4], eax            ; output[0x04] = secondary_id
  * 0x10708ba: lea rdx, [r12+r13+0x200]    ; rdx = slot+0x200 (unique_id)
  * 0x10708df: movdqu xmm3, [rdx]          ; copy 16 bytes from slot+0x200
- * 0x10708e3: movups [rbx+8], xmm3        ; output+0x08 = first 16 bytes
+ * 0x10708e3: movups [ebx+8], xmm3        ; output+0x08 = first 16 bytes
  * 0x10708e7: movzx eax, byte [rdx+0x10]  ; 17th byte from slot+0x210
- * 0x10708eb: mov [rbx+0x18], al          ; output+0x18 = 17th byte
+ * 0x10708eb: mov [ebx+0x18], al          ; output+0x18 = 17th byte
  * 0x1070907: lea rax, [r12+r13+0x224]    ; end of identity (slot+0x224)
  * 0x107090f: lea rdx, [r12+r13+0x214]    ; start of identity (slot+0x214)
  * 0x1070929: movdqu xmm1, [rdx]          ; 16 bytes from slot+0x214
- * 0x107092d: movups [rbx+0x1c], xmm1     ; output+0x1c = identity part 1
+ * 0x107092d: movups [ebx+0x1c], xmm1     ; output+0x1c = identity part 1
  * 0x1070931: movdqu xmm2, [rdx+0x10]     ; 16 bytes from slot+0x224
- * 0x1070936: movups [rbx+0x2c], xmm2     ; output+0x2c = identity part 2
+ * 0x1070936: movups [ebx+0x2c], xmm2     ; output+0x2c = identity part 2
  * 0x107093a: movzx eax, byte [rdx+0x20]  ; slot+0x234 (capability_flags)
- * 0x107093e: mov [rbx+0x3c], al          ; output+0x3c = capability_flags
+ * 0x107093e: mov [ebx+0x3c], al          ; output+0x3c = capability_flags
  * 0x1070941: imul rax, rbp, 0xe8
  * 0x1070948: movzx eax, byte [r12+rax+0x235] ; slot+0x235 (transport_type)
- * 0x1070951: mov [rbx+0x3d], al          ; output+0x3d = transport_type
+ * 0x1070951: mov [ebx+0x3d], al          ; output+0x3d = transport_type
  *
  * ; After data copy, set r14d = 1 (success)
  * 0x1070a54: mov r14d, 1
@@ -133,7 +133,7 @@ Verified: 2026-06-29
  * 0x109284b: imul rax, rax, 0x54        ; id * 0x54 (ControllerDetails stride)
  * 0x1092851: lea rax, [rdi + rax + 0x1070]  ; controller + 0x1070 + id*0x54
  *
- * Copies qwords from details_input (rbx) to ControllerDetails slot (rax):
+ * Copies qwords from details_input (ebx) to ControllerDetails slot (rax):
  *   [rax+0x08] = [rsi+0x00]  (qword)
  *   [rax+0x10] = [rsi+0x08]  (qword)
  *   [rax+0x18] = [rsi+0x10]  (qword)
@@ -141,7 +141,7 @@ Verified: 2026-06-29
  *   [rax+0x58] = [rsi+0x50]  (dword)
  *
  * Then sets ready_flag:
- * 0x10929bf: mov dword [r15 + 0x3c], 1  ; controller+0x3c = 1
+ * 0x10929bf: mov dword [esi + 0x3c], 1  ; controller+0x3c = 1
  *            (NOT controller+slot*0xe8+0x200!)
  */
 

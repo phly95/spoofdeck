@@ -1,7 +1,7 @@
 ⚠️ DISCLAIMER: WRONG BINARY ANALYZED
 
 All analysis in this file was performed on the WRONG binary:
-  ~/.steam/debian-installation/linux64/steamclient.so (46MB, 64-bit x86_64)
+  ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit) [CORRECT]
 
 Steam actually loads:
   ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit i386)
@@ -29,24 +29,24 @@ The `cmp al, 0xf2` instruction appears in many places, but most are in data tabl
 
 From the search results, the most promising candidates for the 0xf2 handler are:
 
-### 1. Function at VA 0x012f8420
-- Contains `cmp al, 0xf2` at VA 0x013013c1 and 0x013013d2
+### 1. Function at VA 0x012f8420 [32-bit: NEEDS RE-ANALYSIS]
+- Contains `cmp al, 0xf2` at VA 0x013013c1 [32-bit: NEEDS RE-ANALYSIS] and 0x013013d2 [32-bit: NEEDS RE-ANALYSIS]
 - This function appears to be a serialization/deserialization handler
-- At 0x013013c1: calls function 0x2223700 and 0x22238a0
+- At 0x013013c1 [32-bit: NEEDS RE-ANALYSIS]: calls function 0x2223700 and 0x22238a0
 - These look like buffer read/write operations
 
-### 2. Function at VA 0x0138d0f0
-- Contains `cmp al, 0xf2` at VA 0x01393d40
+### 2. Function at VA 0x0138d0f0 [32-bit: NEEDS RE-ANALYSIS]
+- Contains `cmp al, 0xf2` at VA 0x01393d40 [32-bit: NEEDS RE-ANALYSIS]
 - Context shows: `48 8d 35 3c f2 72 ff` which is a LEA with displacement
 - Followed by `0f b6 d0` (movzx edx, al) - loading a byte value
 
-### 3. Function at VA 0x010104a0
-- Contains `cmp al, 0xf2` at VA 0x01016496
+### 3. Function at VA 0x010104a0 [32-bit: NEEDS RE-ANALYSIS]
+- Contains `cmp al, 0xf2` at VA 0x01016496 [32-bit: NEEDS RE-ANALYSIS]
 - This is in the early protocol handler area
 
-## Analysis of 0x013013c1 Context
+## Analysis of 0x013013c1 [32-bit: NEEDS RE-ANALYSIS] Context
 
-The code at 0x013013c1:
+The code at 0x013013c1 [32-bit: NEEDS RE-ANALYSIS]:
 ```asm
 13013bf:  e8 3c 3c f2 00     call   2225000    ; Some function
 13013c4:  48 8b bd 68 b2 ff ff  mov    rdi, [rbp-0x4d98]

@@ -5,14 +5,14 @@
  *                  SDL3 src/joystick/hidapi/steam/controller_constants.h
  *                  SDL3 src/joystick/hidapi/SDL_hidapi_steam_triton.c
  *
- * Binary: ~/.steam/debian-installation/linux64/steamclient.so
+ * Binary: ~/.steam/debian-installation/ubuntu12_32/steamclient.so (32-bit, 49MB)
  * Status: DETERMINED (from SDL3 source)
  */
 
 ⚠️ DISCLAIMER: WRONG BINARY ANALYZED
 
 All analysis in this file was performed on the WRONG binary:
-  ~/.steam/debian-installation/linux64/steamclient.so (46MB, 64-bit x86_64)
+  ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit) [CORRECT]
 
 Steam actually loads:
   ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit i386)
@@ -220,14 +220,14 @@ Verified: 2026-06-29
  * === BINARY REFERENCES (steamclient.so) ===
  *
  * TriggerHapticPulse LEA references:
- *   VA 0x01320765, 0x01320784, 0x01320859, 0x013208cb
+ *   VA 0x01320765 [32-bit: NEEDS RE-ANALYSIS], 0x01320784 [32-bit: NEEDS RE-ANALYSIS], 0x01320859 [32-bit: NEEDS RE-ANALYSIS], 0x013208cb [32-bit: NEEDS RE-ANALYSIS]
  *   (all in IClientTimeline dispatch function, hash 0xf4ee1f05)
  *
  * ForceSimpleHapticEvent LEA references:
- *   VA 0x0132425b, 0x0132427a, 0x013242b6, 0x01324368
+ *   VA 0x0132425b [32-bit: NEEDS RE-ANALYSIS], 0x0132427a [32-bit: NEEDS RE-ANALYSIS], 0x013242b6 [32-bit: NEEDS RE-ANALYSIS], 0x01324368 [32-bit: NEEDS RE-ANALYSIS]
  *
  * CRumbleThread LEA reference:
- *   VA 0x0111d10b (in jump table dispatcher using CRumbleThread string
+ *   VA 0x0111d10b [32-bit: NEEDS RE-ANALYSIS] (in jump table dispatcher using CRumbleThread string
  *   at 0x00aa5b00 as base for offset table)
  *
  * RTTI class names:

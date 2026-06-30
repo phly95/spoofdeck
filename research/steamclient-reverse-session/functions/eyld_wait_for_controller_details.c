@@ -1,7 +1,7 @@
 ⚠️ DISCLAIMER: WRONG BINARY ANALYZED
 
 All analysis in this file was performed on the WRONG binary:
-  ~/.steam/debian-installation/linux64/steamclient.so (46MB, 64-bit x86_64)
+  ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit) [CORRECT]
 
 Steam actually loads:
   ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit i386)
@@ -19,9 +19,9 @@ Verified: 2026-06-29
 # EYldWaitForControllerDetails Function
 
 ## Location
-- Binary: `~/.steam/debian-installation/linux64/steamclient.so`
-- Function start: `0x01071c70` (within `Steam_GSGetSteamID + 0x8a530`)
-- String reference: `EYldWaitForControllerDetails` at vaddr `0x00d4da02`
+- Binary: `~/.steam/debian-installation/ubuntu12_32/steamclient.so` (32-bit, 49MB) [CORRECT]
+- Function start: `0x01071c70 [32-bit: NEEDS RE-ANALYSIS]` (within `Steam_GSGetSteamID + 0x8a530`)
+- String reference: `EYldWaitForControllerDetails` at vaddr `0x00b9979f`
 - Timeout: `0x1e8480` (2,000,000 microseconds = 2 seconds)
 
 ## Pseudocode

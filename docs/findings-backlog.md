@@ -107,15 +107,15 @@ Steam-generated haptics (trackpad clicks, UI feedback) use a different code path
 ### Binary Addresses
 | Function | VA | String Reference | Status |
 |----------|-----|------------------|--------|
-| TriggerHapticPulse | 0x013205a3 | 0x00ab43f0 | IClientTimeline dispatcher, NOT haptic |
-| ForceSimpleHapticEvent | 0x01322dae | 0x00ab43b0 | IClientVideo dispatcher, NOT haptic |
-| CRumbleThread | 0x0111b370 | 0x00aa5b00 | Jump table dispatcher |
-| CPulseHapticWorkItem | RTTI at 0x00aa28e2 | — | Confirmed in Steam logs |
-| SDL_hid_write | dlsym at 0x01760ff5 | — | Resolved at runtime |
-| SDL_hid_send_feature_report | dlsym at 0x01760fa2 | — | Resolved at runtime |
-| Haptic trigger (0x17252a0) | 0x017252a0 | — | **DEAD CODE** — zero callers |
-| SDL.joystick.cap.rumble | 0x00d0d093 | — | Gates bit 14 (0x4000) in capability bitmask |
-| set_report_cb error | 0x00115f13 | "hog-lib.c" | BlueZ SET_REPORT failure |
+| TriggerHapticPulse | 0x013205a3 [32-bit: NEEDS RE-ANALYSIS] | 0x00ab43f0 | IClientTimeline dispatcher, NOT haptic |
+| ForceSimpleHapticEvent | 0x01322dae [32-bit: NEEDS RE-ANALYSIS] | 0x00ab43b0 | IClientVideo dispatcher, NOT haptic |
+| CRumbleThread | 0x0111b370 [32-bit: NEEDS RE-ANALYSIS] | 0x00aa5b00 | Jump table dispatcher |
+| CPulseHapticWorkItem | RTTI at 0x00aa28e2 [32-bit: NEEDS RE-ANALYSIS] | — | Confirmed in Steam logs |
+| SDL_hid_write | dlsym at 0x00e16f04 | — | Resolved at runtime |
+| SDL_hid_send_feature_report | dlsym at 0x00dfb22b | — | Resolved at runtime |
+| Haptic trigger (0x17252a0) | 0x017252a0 [32-bit: NEEDS RE-ANALYSIS] | — | **DEAD CODE** — zero callers |
+| SDL.joystick.cap.rumble | 0x00d0d093 [32-bit: NEEDS RE-ANALYSIS] | — | Gates bit 14 (0x4000) in capability bitmask |
+| set_report_cb error | 0x00115f13 [32-bit: NEEDS RE-ANALYSIS] | "hog-lib.c" | BlueZ SET_REPORT failure |
 
 ### What's Been Tried
 - Testing haptics with Steam UI (trackpad clicks, start button holds) — no haptics triggered
@@ -158,9 +158,9 @@ Steam-generated haptics (trackpad clicks, UI feedback) use a different code path
 - BLE: `ae 15 04 00 34 5e bc e8 5c d7 8f c5 c8 d8 8f c5 a0 48 a7 e8 07 00`
 - Write data differs between native and BLE (different serial hashes). Our handler ignores write data and returns fixed synthetic serial. **Confidence: Confirmed**
 
-**0x8F gate hypothesis (VERIFIED, but [rdi+0x1d8] theory UNVERIFIED):**
-- `[r15+0x208]` at `0x10d4da0` gates 0x8F dispatch — **VERIFIED** (audit confirmed instruction)
-- `YieldingRunTestProgram` at `0x015677f4` is the ONLY function that sets this flag to 1 — **VERIFIED** (string at 0x00d6d17b, instruction at 0x0156781c: `mov byte [r15+0x208], 1`)
+**0x8F gate hypothesis (VERIFIED, but [esi+0x17c] theory UNVERIFIED):**
+- `[esi+0x17c]` at `0x0123e5fb` gates 0x8F dispatch — **VERIFIED** (audit confirmed instruction)
+- `YieldingRunTestProgram` at `0x015677f4` [32-bit: NEEDS RE-ANALYSIS] is the ONLY function that sets this flag to 1 — **VERIFIED** (string at 0x00bfc7e3, instruction at `0x0178a140`: `mov byte [esi+0x17c], 1`)
 - On native Deck, this flag gets set during initialization → 0x8F commands are dispatched
 - On BLE, this flag stays 0 → 0x8F commands are never dispatched
 - Most likely cause: Feature Report write responses not handled correctly, causing initialization to stall before YieldingRunTestProgram runs. **Confidence: Confirmed**
@@ -174,14 +174,14 @@ The investigation revealed that hours of static analysis produced contradictory 
 
 **Status: UNVERIFIED — Likely graphics API type, not controller state**
 
-The function at `0x01559070` writes `[object+0x1d8]` = graphics API type:
-- `0x015647f5`: edx=1 (GL)
-- `0x01564857`: edx=1 (GL D3D variant)
-- `0x015648bc`: edx=2 (Vulkan)
-- `0x0156323f`: edx=3 (D3D12 path A)
-- `0x015632e1`: edx=4 (D3D12 path B)
+The function at `0x01559070` [32-bit: NEEDS RE-ANALYSIS] writes `[object+0x1d8]` = graphics API type:
+- `0x015647f5` [32-bit: NEEDS RE-ANALYSIS]: edx=1 (GL)
+- `0x01564857` [32-bit: NEEDS RE-ANALYSIS]: edx=1 (GL D3D variant)
+- `0x015648bc` [32-bit: NEEDS RE-ANALYSIS]: edx=2 (Vulkan)
+- `0x0156323f` [32-bit: NEEDS RE-ANALYSIS]: edx=3 (D3D12 path A)
+- `0x015632e1` [32-bit: NEEDS RE-ANALYSIS]: edx=4 (D3D12 path B)
 
-**However**: We are NOT certain these are the same object type as what the dispatcher at `0x015675a8` reads. Offset 0x1d8 is used in hundreds of places for different purposes. The connection between the shader compilation path and the YieldingRunTestProgram path is unverified. **Confidence: Speculative (circumstantial evidence only)**
+**However**: We are NOT certain these are the same object type as what the dispatcher at `0x015675a8` [32-bit: NEEDS RE-ANALYSIS] reads. Offset 0x1d8 is used in hundreds of places for different purposes. The connection between the shader compilation path and the YieldingRunTestProgram path is unverified. **Confidence: Speculative (circumstantial evidence only)**
 
 #### Finding: Values 3 and 4 Are Never Statically Written to 0x1d8
 
@@ -193,13 +193,13 @@ Exhaustive search found that values 3 and 4 are NEVER written as immediate value
 
 **Status: CONFIRMED**
 
-The BLE handler at `0x010c4e0c` sets `[r12+0x08] = 1` (BLE flag). But this byte is NEVER READ anywhere in the binary — not in the PID dispatch area, not in the handler's vtable methods, not elsewhere. The BLE vs USB distinction is NOT made by this flag at the code level. **Confidence: Confirmed**
+The BLE handler at `0x010c4e0c` [32-bit: NEEDS RE-ANALYSIS] sets `[r12+0x08] = 1` (BLE flag). But this byte is NEVER READ anywhere in the binary — not in the PID dispatch area, not in the handler's vtable methods, not elsewhere. The BLE vs USB distinction is NOT made by this flag at the code level. **Confidence: Confirmed**
 
 #### Finding: Controller Constructor Reads [parent+0x1B0]
 
 **Status: CONFIRMED**
 
-The controller constructor at `0x01558bb0` reads `[parent+0x1b0]` and stores it at `[controller+0x1d8]`. The parent's field at 0x1B0 is set to `0x02accf60` (a sub-vtable pointer) at `0x00f907c5` or `0x00f912bb`. **However**: The pointer at 0x1d8 gets overwritten with a small integer (1-4) later. The destructor at `0x01551560` reads [0x1d8] as a QWORD pointer, suggesting the pointer and integer coexist — the overwrite happens after construction but before the dispatcher runs. **Confidence: Confirmed**
+The controller constructor at `0x01558bb0` [32-bit: NEEDS RE-ANALYSIS] reads `[parent+0x1b0]` and stores it at `[controller+0x1d8]`. The parent's field at 0x1B0 is set to `0x02accf60` [32-bit: NEEDS RE-ANALYSIS] (a sub-vtable pointer) at `0x00f907c5` [32-bit: NEEDS RE-ANALYSIS] or `0x00f912bb` [32-bit: NEEDS RE-ANALYSIS]. **However**: The pointer at 0x1d8 gets overwritten with a small integer (1-4) later. The destructor at `0x01551560` [32-bit: NEEDS RE-ANALYSIS] reads [0x1d8] as a QWORD pointer, suggesting the pointer and integer coexist — the overwrite happens after construction but before the dispatcher runs. **Confidence: Confirmed**
 
 #### Finding: All 8 Callers of 0x156d6a0 Found
 
@@ -207,16 +207,16 @@ The controller constructor at `0x01558bb0` reads `[parent+0x1b0]` and stores it 
 
 | # | Address | Function | After-call write | Timeout |
 |---|---------|----------|-----------------|---------|
-| 1 | `0x1567817` | YieldingRunTestProgram | [obj+0x208] = 1 | 60s |
-| 2 | `0x1567a7a` | YieldingRunTestProgram variant | NONE | 60s |
-| 3 | `0x15e22fe` | YieldingCheckForUpdateBIOS | [obj+0x1b0] = 1 | 120s |
-| 4 | `0x15e28ae` | YieldingCheckForUpdateOS | [obj+0x1b0] = 1 | 300s |
-| 5 | `0x15e2e8e` | BYieldingRunAPIJob A | NONE | 5s |
-| 6 | `0x15e30d6` | BYieldingRunAPIJob B | [obj+0x1b0] = 1 | 5s |
-| 7 | `0x15e354c` | BYieldingRunAPIJob C | [obj+0x1b0] = 1 | 5s |
-| 8 | `0x15e7934` | YieldingApplyUpdateBIOS | NONE | infinite |
+| 1 | `0x1567817` [32-bit: NEEDS RE-ANALYSIS] | YieldingRunTestProgram | [obj+0x17c] = 1 | 60s |
+| 2 | `0x1567a7a` [32-bit: NEEDS RE-ANALYSIS] | YieldingRunTestProgram variant | NONE | 60s |
+| 3 | `0x15e22fe` [32-bit: NEEDS RE-ANALYSIS] | YieldingCheckForUpdateBIOS | [obj+0x1b0] = 1 | 120s |
+| 4 | `0x15e28ae` [32-bit: NEEDS RE-ANALYSIS] | YieldingCheckForUpdateOS | [obj+0x1b0] = 1 | 300s |
+| 5 | `0x15e2e8e` [32-bit: NEEDS RE-ANALYSIS] | BYieldingRunAPIJob A | NONE | 5s |
+| 6 | `0x15e30d6` [32-bit: NEEDS RE-ANALYSIS] | BYieldingRunAPIJob B | [obj+0x1b0] = 1 | 5s |
+| 7 | `0x15e354c` [32-bit: NEEDS RE-ANALYSIS] | BYieldingRunAPIJob C | [obj+0x1b0] = 1 | 5s |
+| 8 | `0x15e7934` [32-bit: NEEDS RE-ANALYSIS] | YieldingApplyUpdateBIOS | NONE | infinite |
 
-Only Caller 1 sets [0x208] = 1. Callers 3,4,6,7 set [0x1b0] = 1 (update management flag). **Confidence: Confirmed**
+Only Caller 1 sets [0x17c] = 1. Callers 3,4,6,7 set [0x1b0] = 1 (update management flag). **Confidence: Confirmed**
 
 #### Finding: Connection Type Bitfield (0x180) is Separate from 0x1d8
 
@@ -224,21 +224,21 @@ Only Caller 1 sets [0x208] = 1. Callers 3,4,6,7 set [0x1b0] = 1 (update manageme
 
 Offset 0x180 is a skip mask for controller mode initialization — it controls which controller entries are active during mode setup. It does NOT control the 0x1d8 value. 0x180 and 0x1d8 are orthogonal. **Confidence: Confirmed**
 
-#### Finding: Vtable Containing 0x015675a8 is Runtime-Constructed
+#### Finding: Vtable Containing 0x015675a8 [32-bit: NEEDS RE-ANALYSIS] is Runtime-Constructed
 
 **Status: CONFIRMED**
 
-No static vtable entry in the binary contains `0x015675a8`. The vtable is built at runtime. This confirms the LD_PRELOAD patch approach (patching the `je` at `0x10d4da6`) is the right strategy. **Confidence: Confirmed**
+No static vtable entry in the binary contains `0x015675a8` [32-bit: NEEDS RE-ANALYSIS]. The vtable is built at runtime. This confirms the LD_PRELOAD patch approach (patching the `je` at `0x0123e601`) is the right strategy. **Confidence: Confirmed**
 
 ### YieldingRunTestProgram Detailed Analysis (2026-06-29)
 
-- `0x015677f4` is NOT a function entry point — it's an instruction within a larger function starting at `0x015675a8`
-- `0x015675a8` is an 18,300-byte controller message dispatcher (52 basic blocks) that branches on `[rdi+0x1d8]` (controller state/type)
-- If state is 1-2: takes the path that includes YieldingRunTestProgram → sets `[r15+0x208] = 1`
-- If state is 3-4: takes a different path → `[r15+0x208]` stays 0
+- `0x015677f4` [32-bit: NEEDS RE-ANALYSIS] is NOT a function entry point — it's an instruction within a larger function starting at `0x015675a8` [32-bit: NEEDS RE-ANALYSIS]
+- `0x015675a8` [32-bit: NEEDS RE-ANALYSIS] is an 18,300-byte controller message dispatcher (52 basic blocks) that branches on `[esi+0x1d8]` (controller state/type)
+- If state is 1-2: takes the path that includes YieldingRunTestProgram → sets `[esi+0x17c] = 1`
+- If state is 3-4: takes a different path → `[esi+0x17c]` stays 0
 - The function is called indirectly (no direct `call` in binary) — likely through a vtable dispatch
-- `0x156d6a0` (called by YieldingRunTestProgram) is a **general-purpose job context allocator**, NOT HID-specific
-- The `[reg+0x1b0] = 1` flag at `0x15e2xxx` addresses is from SteamOS **update management** functions — completely unrelated to controllers
+- `0x156d6a0` [32-bit: NEEDS RE-ANALYSIS] (called by YieldingRunTestProgram) is a **general-purpose job context allocator**, NOT HID-specific
+- The `[reg+0x1b0] = 1` flag at `0x15e2xxx` [32-bit: NEEDS RE-ANALYSIS] addresses is from SteamOS **update management** functions — completely unrelated to controllers
 - **Confidence: Confirmed** (radare2 + objdump analysis)
 
 ### Live Connection Test Results (2026-06-29)
@@ -257,27 +257,27 @@ Clean connection test with host BlueZ debug logging:
 
 ### What Investigates Next (2026-06-29 evening)
 
-**GDB watchpoint on [rdi+0x1d8] (RECOMMENDED NEXT STEP):**
-- Set a GDB watchpoint on the memory location `[rdi+0x1d8]` during BLE connection init
-- Observe what value is actually read by the dispatcher at `0x015675a8`
+**GDB watchpoint on [esi+0x1d8] (RECOMMENDED NEXT STEP):**
+- Set a GDB watchpoint on the memory location `[esi+0x1d8]` during BLE connection init
+- Observe what value is actually read by the dispatcher at `0x015675a8` [32-bit: NEEDS RE-ANALYSIS]
 - Resolves whether 0x1d8 is a controller state, graphics API type, or something else
 - Takes 5 minutes vs hours of static analysis
 - **Meta-lesson: static analysis produced contradictory findings; runtime verification via GDB is the definitive approach**
 - **Confidence: Recommended (grounded in verified gate mechanism, but dispatcher input is unverified)**
 
 **LD_PRELOAD patch for 0x8F gate (AFTER GDB VERIFICATION):**
-- Patch `je 0x10d4fd0` at `0x10d4da6` to `nop nop` at runtime via `LD_PRELOAD`
-- Forces 0x8F dispatch regardless of `[r15+0x208]` gate
+- Patch `je` at `0x0123e601` to `nop nop` at runtime via `LD_PRELOAD`
+- Forces 0x8F dispatch regardless of `[esi+0x17c]` gate
 - 55-65% probability of working
-- If crashes: GDB watchpoint on `[r15+0x208]` reveals what gate controls
+- If crashes: GDB watchpoint on `[esi+0x17c]` reveals what gate controls
 - If works: Steam haptics (trackpad clicks, UI feedback) will flow to Neptune motors
 - **Confidence: Speculative (hasn't been tested yet, but grounded in verified root cause)**
 
 **Other open questions:**
 1. **Why does Steam retry GET_SERIAL 19+ times on BLE?** Our handler returns valid response with 'F'-prefixed serial. Steam might compute a hash from the write data and compare it to the response. Native write data: `ae 15 01 05 12 00 00 02 00...` vs BLE write data: `ae 15 04 00 34 5e bc e8 5c...`
-2. **What does [rdi+0x1d8] actually hold for BLE devices?** UNVERIFIED — may be graphics API type (1=GL, 2=Vulkan, 3/4=D3D12) instead of controller state. Values 3/4 never written as immediates. GDB watchpoint is the definitive test.
-3. **What triggers the call to `0x015675a8`?** Invoked indirectly through vtable dispatch — vtable is runtime-constructed. What vtable entry does our BLE device use?
-4. **Why is [r12+0x08] BLE flag never read?** The handler at `0x010c4e0c` sets this flag but it's never consumed. The BLE vs USB distinction may be made elsewhere.
+2. **What does [esi+0x1d8] actually hold for BLE devices?** UNVERIFIED — may be graphics API type (1=GL, 2=Vulkan, 3/4=D3D12) instead of controller state. Values 3/4 never written as immediates. GDB watchpoint is the definitive test.
+3. **What triggers the call to `0x015675a8`?** [32-bit: NEEDS RE-ANALYSIS] Invoked indirectly through vtable dispatch — vtable is runtime-constructed. What vtable entry does our BLE device use?
+4. **Why is [r12+0x08] BLE flag never read?** The handler at `0x010c4e0c` [32-bit: NEEDS RE-ANALYSIS] sets this flag but it's never consumed. The BLE vs USB distinction may be made elsewhere.
 
 **ATT Server Write Response Handling:**
 - Feature Report writes arrive as ATT Write Request (0x12) on handle 0x0024. **Confidence: Confirmed**
@@ -380,18 +380,27 @@ right_speed → right_intensity (uint16 LE at bytes 7-8)
 
 > **CRITICAL**: All prior binary analysis was on the WRONG binary (64-bit). This section contains verified 32-bit addresses from the actual running Steam process.
 
-### Correct 32-bit Addresses (from GDB + r2 analysis)
+### Correct 32-bit Addresses (from GDB + r2 + Ghidra analysis)
 
 | What | 32-bit VA | Function Start | Notes |
 |------|-----------|----------------|-------|
 | **YieldingRunTestProgram string ref** | `0x0178a164` | `0x01789ea0` | `lea ecx, [edi - 0x230ae0d]` loads string at `0x00bfc7e3` |
-| **Gate SET** | `0x0178a140` | `0x01789ea0` | `mov byte [esi + 0x17c], 1` (NOT 0x208!) |
-| **Gate CHECK #1** | `0x0123e5fb` | `0x0123e5da` | `cmp byte [esi+0x17c], 0` → `jne 0x123e898` (skip if set) |
+| **Gate SET** | `0x0178a140` | `0x01789c00` | `mov byte [esi + 0x17c], 1` (NOT 0x208!) — inside ShaderCacheManager |
+| **Gate CHECK #1** | `0x0123e5fa` | `0x0123e1e0` | `cmp byte [esi+0x17c], 0` → `jne 0x123e898` (skip if set) |
 | **Gate CHECK #2** | `0x02b82326` | `0x02b8213a` | `cmp byte [esi+0x17c], 0` → `je 0x2b82870` (skip if NOT set) |
 | **Gate CHECK #3** | `0x0123f11a` | `0x0123e5da` | `cmp byte [ebp+0x17c], 0` → `je 0x123f340` |
 | **0x8F Dispatcher #1** | `0x00ec13a4` | `0x00ec1330` | Jump table, `cmp eax, 0x8f`, `shr ecx, 3` |
 | **0x8F Dispatcher #2** | `0x00eed3c4` | `0x00eed350` | Same pattern, different jump table |
-| **0x8F Handler** | `0x028939f4` | (large func) | `je 0x2893aeb` → sets `[esi+0x1a8]=0xc, [esi+0x1b0]=0x3f` |
+| **0x8F Handler** | `0x028939f4` | `0x0289318e` | Sets `[esi+0x1a8]=0xc, [esi+0x1b0]=0x3f` |
+| **CHIDIOThread_Main** | `0x011b3a60` | `0x011b3a60` | Main HID I/O thread, references "CSteamController::CHIDIO Thread" |
+| **CHIDIOThread_CWorkItem** | `0x011d5850` | `0x011d5850` | Work item thread for HID I/O |
+| **CGetControllerInfoWorkItem** | `0x01218840` | `0x01218840` | Reads controller info via HID. Logs "Read failure". Retries 51x |
+| **EYldWaitForControllerDetails** | `0x011cee30` | `0x011cee30` | Blocks 2s for controller details to be ready |
+| **Zombie_Controller_Check** | `0x011f7630` | `0x011f7630` | Detects zombie controllers. Logs "Zombie Controller" |
+| **Controller_Identity_Failure** | `0x01219bf0` | `0x01219bf0` | Checks identity before registration |
+| **RegisterSteamController** | `0x0121a690` | `0x0121a690` | Full registration via AccountHardware API |
+| **SDL_JOYSTICK_HIDAPI_STEAM_Setup** | `0x011e45d0` | `0x011e45d0` | Loads libSDL3.so.0, sets SDL_JOYSTICK_HIDAPI_STEAM=1 |
+| **QueryAccountsRegisteredToController** | `0x011beca0` | `0x011beca0` | Queries account-controller pairings |
 
 ### GOT Base
 - Register: `edi`
@@ -401,6 +410,48 @@ right_speed → right_intensity (uint16 LE at bytes 7-8)
 ### Key Difference from 64-bit
 - 64-bit gate offset: `0x208` → 32-bit gate offset: `0x17c` (pointer size difference)
 - 64-bit gate register: `r15` → 32-bit gate register: `esi`
+
+### Controller Object Offset Map (from Ghidra decompilation)
+
+| Offset | Size | Description |
+|--------|------|-------------|
+| `+0x17c` | byte | **Haptic gate flag** (0=blocked, 1=enabled). Checked by gate CHECK, set by YRT |
+| `+0x1d8` | dword | **Graphics API type** (0=unset, 1=GL, 2=Vulkan, 3=D3D12A, 4=D3D12B) |
+| `+0x1b0` | dword | Parent vtable pointer. Read by constructor, stored at +0x1d8 initially |
+| `+0x1a8` | dword | Set to 0xC by 0x8F handler |
+| `+0x1b0` | dword | Set to 0x3F by 0x8F handler |
+| `+0x140` | ptr | Object pointer (used in many vtable calls) |
+
+### SDL Configuration (from FUN_011e45d0)
+
+Steam loads `libSDL3.so.0` at runtime and sets these environment variables:
+
+| Variable | Value | Effect |
+|----------|-------|--------|
+| `SDL_JOYSTICK_HIDAPI_STEAM` | `"1"` | **Enables Steam HIDAPI driver** — talks to SC2 via HID feature reports |
+| `SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS` | `"1"` | Allows input even when not focused |
+| `SDL_JOYSTICK_ENHANCED_REPORTS` | `"1"` | Uses enhanced report format |
+| `SDL_AUTO_UPDATE_JOYSTICKS` | `"1"` | Auto-discovers new controllers |
+| `SDL_JOYSTICK_RAWINPUT` | `"1"` | Enables raw input path |
+| `SDL_JOYSTICK_HIDAPI_STEAMXBOX` | `"0"` | Disables SteamXbox HIDAPI |
+
+**Critical**: `SDL_JOYSTICK_HIDAPI_STEAM=1` means Steam uses SDL3's HIDAPI driver for Steam controllers, bypassing the kernel's `hid-steam` driver. Communication is via HID feature/output reports directly.
+
+### Haptic Pipeline (from code analysis)
+
+**Path 1: Game-level rumble (WORKING)**:
+```
+Game → SDL_RumbleJoystick() → SDL_hid_write(/dev/hidrawN)
+  → Kernel hog-ll → ATT Write Request (0x12) to handle 0x0019
+    → _on_haptic_write() → _forward_haptic_to_neptune()
+```
+
+**Path 2: Steam-generated haptics (NOT WORKING)**:
+```
+Steam controller logic
+  → Gate CHECK [esi+0x17c] == 0 → code path SKIPPED
+    → 0x8F TRIGGER_HAPTIC_PULSE never dispatched
+```
 
 ### GDB Runtime Test Results (2026-06-29)
 

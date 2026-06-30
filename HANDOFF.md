@@ -1,234 +1,274 @@
-# Handoff Guide — Steam Deck to SC2 BLE Spoof Project
+# Morning Handoff - 2026-06-30
 
-This document provides a summary of the current architecture, what is currently working, what needs to be done next, and the recommended approaches.
+## Summary
 
----
+Three major work items completed:
+1. **Structured protocol logging** — JSON log lines, parser script, native-vs-BLE diff template, safe ATT correctness fixes. No protocol behavior changed.
+2. **32-bit binary address conversion** — All RE analysis files updated from 64-bit (`linux64/steamclient.so`) to 32-bit (`ubuntu12_32/steamclient.so`) addresses. 56 files changed, 1378 insertions, 1345 deletions.
+3. **Ghidra headless analysis** — Full analysis of both 32-bit and 64-bit binaries. 141,351 functions exported. 12 new verified 32-bit function addresses. Controller behavior map documented in `research/32bit_ghidra_findings.md`. **Key finding: the 0x8F haptic command is never dispatched on BLE because the entire initialization chain stalls — the gate at `[esi+0x17c]` is not the direct blocker.**
 
-## 1. Project Goal & Current Architecture
-We present the **Steam Deck** as a **Steam Controller 2026 (SC2 / Triton)** over **Bluetooth Low Energy** so that the host PC's Steam Client recognizes it natively and supports full Steam Input features (trackpads, gyro, haptics, back buttons).
+## Changes Made
 
-### Architecture Overview
-```
-┌──────────────────────────────────────────────────────────┐
-│                    Steam Deck (Peripheral)                 │
-│                                                          │
-│  ┌─────────────────────────────────────────────────────┐ │
-│  │  main_l2cap.py                                      │ │
-│  │  ├─ GLib main loop (BlueZ D-Bus advertising)        │ │
-│  │  ├─ Agent1 (auto-confirm pairing via dbus-python)   │ │
-│  │  └─ Raw L2CAP ATT server thread                     │ │
-│  │     └─ Binds to C2:12:34:56:78:9A CID 4             │ │
-│  │     └─ Handles ATT PDU exchange (MTU, discovery)    │ │
-│  │     └─ Serves GATT database (85 attributes, 6 services)│ │
-│  └─────────────────────────────────────────────────────┘ │
-│                                                          │
-│  BlueZ handles:                                          │
-│  ├─ SMP pairing (kernel, CID 6)                          │
-│  └─ LE advertising (LEAdvertisingManager1)               │
-│                                                          │
-│  Input Source: /dev/hidraw3 (Neptune HID state reports)   │
-│  ├─ input_handler.py reads 64-byte Neptune reports       │
-│  ├─ Maps buttons/sticks/triggers to SC2 format           │
-│  └─ Sends as ATT notifications (Mouse/Keyboard/Gamepad)  │
-└──────────────────────────────────────────────────────────┘
-              │
-              │ BLE (static random addr C2:12:34:56:78:9A)
-              ▼
-┌──────────────────────────────────────────────────────────┐
-│                    Host PC (Central)                      │
-│                                                          │
-│  BlueZ hog-ll driver → /dev/hidrawN                      │
-│   └─ Standard evdev events (eventN) for Mouse/Keyboard   │
-│   └─ Steam Client reads raw hidraw for Steam Input       │
-└──────────────────────────────────────────────────────────┘
-```
+### Part 1: Protocol Logging & Diagnostics
 
----
+1. **Structured protocol logging** — JSON log lines emitted to stderr when `SPOOFDECK_PROTO_LOG=1` is set. Covers ATT Write Request (0x12), Write Command (0x52), Read Request (0x0A), Read Blob (0x0C), notifications, haptic writes, and SC2 command processing. Each line includes timestamp, event name, opcode, handle, payload hex, detected SC2 command byte/name, response, and callback status.
 
-## 2. What is Working
-- **Raw L2CAP ATT Server (CID 4)**: Bypasses the SteamOS BlueZ GATT listener socket binding bug.
-- **Just Works Pairing**: Auto-confirm via D-Bus `Agent1`.
-- **GATT Database (85 attributes, 6 services)**: GAP, GATT, HID (0x1812) with CHR_REPORT for SC2 Custom + Haptic Output, Valve Custom HID Service, Battery, Device Information.
-- **PnP ID**: USB-IF source (0x02), Valve VID (0x28DE), PID (0x1303).
-- **Physical Deck Input Capture**: Reads Neptune controller `/dev/hidraw3` (64-byte HID reports).
-- **Neptune Auto-Recovery**: Reopens hidraw on crash (2s delay, 10 retries).
-- **45-byte SC2 Custom Reports**: Full Triton 32-bit button bitmask (verified from SDL3 `TritonButtons` enum), analog sticks, triggers, trackpads, IMU, force sensors. Sent on CHR_REPORT handles 0x0033 and 0x004f.
-- **Standard HID Gamepad Reports**: 12-byte reports on handle `0x0012` with buttons, analog sticks (Y axis corrected), triggers. Host creates `/dev/input/eventN`.
-- **Lizard Mode Mouse/Keyboard**: Relative mouse (right trackpad) and keyboard reports on handles `0x0019`/`0x001d`.
-- **Lizard mode properly disabled** — NEPTUNE_LIZARD_OFF_CMDS uses direct 0x81 command (no Report ID prefix). EVIOCGRAB grabs event4/event5 at startup to prevent lizard mode evdev events from reaching KDE desktop.
-- **Trackpads work** — Left/right trackpad X/Y data flows in 45-byte reports.
-- **Gyro works** — IMU accelerometer and gyroscope data flows in 45-byte reports.
-- **Back buttons work** — L4/L5/R4/R5 paddle data flows in button bitmask.
-- **Synthetic SC2 Command Handler**: Feature Report 0x00 intercepts SC2 commands:
-  - `0x83` GET_ATTRIBUTES - responds with synthetic device info (capabilities bitmask 0x4169bfff)
-  - `0xAE` GET_SERIAL - responds with serial number
-  - `0xBA` GET_CHIP_ID - responds with 15-byte chip ID
-  - `0x87` SET_SETTINGS - acknowledges, stores register values
-  - `0x89` GET_SETTINGS_VALUES - returns stored register values
-  - `0x81` CLEAR_MAPPINGS - acknowledges
-  - `0x85` SET_DEFAULT_DIGITAL_MAPPINGS - acknowledges
-  - `0x8D` SET_CONTROLLER_MODE - mode switch (lizard ↔ Steam Input)
-  - Unknown commands echoed with zero payload
-- **Haptic forwarding works for in-game rumble** — Full pipeline confirmed end-to-end with Celeste hazard impacts. Host game calls `SDL_RumbleJoystick()` → SDL writes output report to `/dev/hidrawN` → kernel `UHID_OUTPUT` → BlueZ hog-ll `forward_report()` → ATT Write Request (0x12) to handle 0x0019 → `_on_haptic_write()` → `_forward_haptic_to_neptune()` → writes PackedRumbleReport to `/dev/hidraw3` → Neptune dual ERM motors vibrate. Rumble format matches InputPlumber's PackedRumbleReport: `[0xeb, 0x09, 0x00, 0x00, 0x00, left_lo, left_hi, right_lo, right_hi]` padded to 64 bytes.
-- **Feature Report Proxy to Neptune**: Non-SC2 Feature Reports proxied to Neptune hardware via `ioctl`.
-- **Steam Client SC2 Recognition**: Steam detects Type 10 (Neptune/SC2), ProductID 4867 (0x1303), loads `controller_neptune.vdf`, auto-registers controller. 45-byte SC2 Custom reports (Report ID 0x45) verified flowing to `/dev/hidrawN` via hexdump.
-- **Bonding Key Mismatch Fix**: After Deck BT restart, stale LTK on host causes `[Errno 38] ENOSYS` on `conn.recv()`. Fix: `bluetoothctl remove C2:12:34:56:78:9A` then re-pair. For cumulative BlueZ state corruption (zombie disconnects, CCCDs not enabled), clear bond data:
-  ```
-  sudo rm -rf /var/lib/bluetooth/<HOST_BT_MAC>/C2:12:34:56:78:9A
-  sudo rm -rf /var/lib/bluetooth/cache
-  sudo systemctl restart bluetooth
-  ```
-  Then restart Deck's sc2-hogp service. Note: `rmmod btusb && modprobe btusb` does NOT fix this — stale state is in BlueZ user-space.
-- **Comprehensive Diagnostic Logging** (`[DIAG]` tagged).
+2. **Log parser** — `scripts/extract_proto_trace.py` reads structured logs and outputs chronological command list, counts by command byte, retry counts (0x81, 0x83, 0x87, 0x8D, 0x8F, 0xAE, 0xF2), first/last timestamp per command, and optional CSV output.
 
----
+3. **Native-vs-BLE diff template** — `research/native_vs_ble_command_diff_TEMPLATE.md` with sections for each tracked SC2 command, ready to fill in after capturing both native and BLE traces.
 
-## 3. What Needs to be Done
+4. **ATT correctness fixes** (behavior-preserving):
+   - `ATT_ERR_INVALID_OFFSET` (0x07) now returned for Read Blob with offset >= value length (was incorrectly 0x01).
+   - PDU length validation added to MTU Request, Write Request, Write Command, Read Request, and Read Blob. Returns `ATT_ERR_INVALID_PDU` (0x04) instead of crashing on malformed packets.
+   - MTU caps applied: Read Response capped to `mtu - 1`, Read Blob Response capped to `mtu - 1`, Notification capped to `mtu - 3`.
+   - Write Command (0x52) CCCD handling now updates notification state consistently with Write Request (0x12).
 
-### 1. ~~Fix Zombie Disconnect~~ RESOLVED (2026-06-26)
-- **Status**: Registration is now **stable**. `BYieldingCompleteSteamControllerRegistration` completes. No zombie disconnects. Input flows on handle 0x0012.
-- **Root cause was stale BlueZ state** — cached bonding keys, CCCD states, and HOG profile state from previous sessions blocked SET_REPORT. Host PC reboot cleared it.
-- **Fix for future breakage**:
-  ```
-  sudo rm -rf /var/lib/bluetooth/<HOST_BT_MAC>/C2:12:34:56:78:9A
-  sudo rm -rf /var/lib/bluetooth/cache
-  sudo systemctl restart bluetooth
-  ```
-  Then restart Deck's sc2-hogp service. `rmmod btusb` does NOT fix this — stale state is in BlueZ user-space.
+### Part 2: 32-bit Binary Address Conversion
 
-### 2. ~~Fix Encryption Error~~ RESOLVED (2026-06-26)
-- **Status**: Cleared after host PC reboot. Same root cause as zombie disconnect — stale BlueZ state.
+5. **All RE analysis files updated** — Converted all references from the 64-bit binary (`~/.steam/debian-installation/linux64/steamclient.so`) to the 32-bit binary (`~/.steam/debian-installation/ubuntu12_32/steamclient.so`).
 
-### 3. LD_PRELOAD Patch for Steam Haptics (REQUIRES GDB VERIFICATION FIRST)
+6. **52 addresses verified** from the 32-bit binary via `strings`, `grep -boa`, and `objdump` disassembly. Key verified mappings:
+   - YieldingRunTestProgram string: `0x00d6d17b` → `0x00bfc7e3`
+   - Gate SET instruction: `0x0156781c` → `0x0178a140` (`mov byte [esi+0x17c], 1`)
+   - Gate CHECK instruction: `0x010d4da0` → `0x0123e5fb` (`cmp byte [esi+0x17c], 0`)
+   - Gate offset: `0x208` (64-bit, r15) → `0x17c` (32-bit, esi)
+   - 0x8F dispatchers: `0x00ec13a4` and `0x00eed3c4` (same addresses in 32-bit)
+   - All 30+ IPC tag strings (CHIDMessageToRemote, DeviceRead, etc.)
+   - All registration/error strings (Read failure, Zombie Controller, etc.)
+   - SDL dlsym strings (SDL_hid_write, SDL_hid_send_feature_report)
 
-> **⚠️ NOTE: All binary addresses below are from the 64-bit binary. Steam loads the 32-bit binary. The LD_PRELOAD patch must target the 32-bit addresses.**
+7. **26 addresses marked `[NEEDS RE-ANALYSIS]`** — Function entry points in the 0x015xxxxx and 0x010xxxxx ranges that could not be resolved from string analysis alone. These require GDB or IDA/Ghidra analysis of the 32-bit binary.
 
-- **Status**: Gate mechanism concept verified ([0x208] flag controls 0x8F dispatch). However, the specific addresses are from the WRONG binary (64-bit). The actual addresses in the running 32-bit process are unknown. The BLE handler at `0x010c4e0c` sets `[r12+0x08] = 1` (BLE flag) but this byte is NEVER READ.
-- **Recommended next step**: GDB watchpoint on running 32-bit Steam process to find the correct addresses for the dispatcher, gate check, and [0x1d8] value. 5-minute test vs hours of static analysis.
-- **After GDB verification**: Write a C library loaded via `LD_PRELOAD` that patches the conditional jump in the 32-bit binary.
-- **Probability**: 55-65% of working (after dispatcher path is verified). If crashes, GDB watchpoint reveals what gate controls.
-- **Evidence**: Native Deck strace shows 16× 0x8F in 124 HIDIOCSFEATURE calls. BLE shows 0× 0x8F. Connection drops after ~30s. ATT Write Response correct. GET_SERIAL retries 19+ times on BLE vs 4 on native. Controller IS registered.
+2. **Log parser** — `scripts/extract_proto_trace.py` reads structured logs and outputs chronological command list, counts by command byte, retry counts (0x81, 0x83, 0x87, 0x8D, 0x8F, 0xAE, 0xF2), first/last timestamp per command, and optional CSV output.
 
-### 4. Haptics — In-Game Rumble Works, Steam Haptics Do Not
+3. **Native-vs-BLE diff template** — `research/native_vs_ble_command_diff_TEMPLATE.md` with sections for each tracked SC2 command, ready to fill in after capturing both native and BLE traces.
 
-#### In-Game Rumble: WORKS
-- **Status**: Full haptic pipeline confirmed end-to-end. Games that call `SDL_RumbleJoystick()` produce rumble on the Neptune motors.
-- **Confirmed with**: Celeste hazard impacts.
-- **Pipeline**: Host game → `SDL_RumbleJoystick()` → `SDL_hid_write()` → `/dev/hidrawN` → kernel `UHID_OUTPUT` → BlueZ hog-ll `forward_report()` → ATT Write Request (0x12) to handle 0x0019 → `_on_haptic_write()` → `_forward_haptic_to_neptune()` → writes PackedRumbleReport to `/dev/hidraw3` → Neptune dual ERM motors vibrate.
-- **Rumble format**: Matches InputPlumber's PackedRumbleReport — `[0xeb, 0x09, 0x00, 0x00, 0x00, left_lo, left_hi, right_lo, right_hi]` padded to 64 bytes. Written to Neptune via `os.write()` on `/dev/hidraw3`.
+4. **ATT correctness fixes** (behavior-preserving):
+   - `ATT_ERR_INVALID_OFFSET` (0x07) now returned for Read Blob with offset >= value length (was incorrectly 0x01).
+   - PDU length validation added to MTU Request, Write Request, Write Command, Read Request, and Read Blob. Returns `ATT_ERR_INVALID_PDU` (0x04) instead of crashing on malformed packets.
+   - MTU caps applied: Read Response capped to `mtu - 1`, Read Blob Response capped to `mtu - 1`, Notification capped to `mtu - 3`.
+   - Write Command (0x52) CCCD handling now updates notification state consistently with Write Request (0x12).
 
-#### Steam-Generated Haptics: DO NOT WORK
-- **Status**: Trackpad clicks, UI feedback haptics, and other Steam-internal haptic events do NOT produce rumble.
-- **Root cause**: 0x8F never appears on BLE because `[r15+0x208]` gate stays 0. The dispatcher at `0x015675a8` branches on `[rdi+0x1d8]` — if state is 1-2, YieldingRunTestProgram runs and sets the gate; if state is 3-4, the alternative path is taken and the gate stays closed. **However, what `[rdi+0x1d8]` represents is UNVERIFIED** — may be graphics API type, not controller state. Values 3/4 never written as immediates. GDB watchpoint is the definitive test. See section 3 above for full analysis.
-- **Known dead end**: `0x17252a0` (haptic trigger function in steamclient.so) has ZERO callers — confirmed dead code.
-- **SET_SETTINGS notification hypothesis DISPROVEN**: Sending 45-byte ack notifications on handle 0x0033 caused ghost inputs (2026-06-28). Reverted.
+## Files Changed
 
-### 5. ATT Server Spec Compliance (LOW PRIORITY)
-- **Status**: Registration works without these fixes. These are correctness improvements that could prevent issues with different host stacks or future BlueZ versions.
-- **Items (implement one at a time, test each)**:
-  1. **Read Blob error code** (`att_server.py:379`) — Returns `ATT_ERR_INVALID_HANDLE` (0x01) when offset >= value length. Should be `ATT_ERR_INVALID_OFFSET` (0x07).
-  2. **MTU cap on Read/Notify PDUs** — Full values sent without truncating to MTU. Works in practice (MTU exchange happens first) but violates spec.
-  3. **PDU length validation** — No length checks before `struct.unpack` in `_handle_pdu`. Could crash on malformed PDUs.
-  4. **ATT permission checking** — No `ATT_PROP_READ`/`ATT_PROP_WRITE` flag checking on Read/Write Request handlers. **DO NOT check permissions on Write Command** — Feature Report 0x00 has `ATT_PROP_WRITE` but not `ATT_PROP_WRITE_NO_RSP`.
-  5. **Diagnostic handle labels** (`att_server.py:504-510, 525-531`) — Stale hardcoded handles for Mouse, Keyboard, SC2 Custom CH1/CH2. Only Gamepad (0x0012) is correct.
+| File | Change |
+|------|--------|
+| `src/att_server.py` | Added `_proto_log()`, SC2 command name lookup, structured logging in all handlers, PDU length validation, MTU caps, INVALID_OFFSET fix, Write Command CCCD handling |
+| `src/main_l2cap.py` | Added `_proto_log()`, structured logging in SC2 command handler and haptic write callback |
+| `src/gatt_db.py` | Added `ATT_ERR_INVALID_OFFSET = 0x07` constant |
+| `scripts/extract_proto_trace.py` | New file — log parser with CSV output |
+| `research/native_vs_ble_command_diff_TEMPLATE.md` | New file — diff template for native vs BLE captures |
+| `research/steamclient-reverse-session/findings.md` | 32-bit address conversion, disclaimer updated |
+| `research/steamclient-reverse-session/functions/*.c` (43 files) | Binary path, register names, gate offset, all addresses converted to 32-bit |
+| `research/steamclient-reverse-session/notes/analysis_notes.md` | 32-bit notes added |
+| `research/steamclient-reverse/SC2_BLE_DRIVER_REPORT.md` | Binary path updated |
+| `docs/findings-backlog.md` | 32-bit addresses, register/offset conversions |
+| `docs/investigation-plan.md` | 32-bit addresses, LD_PRELOAD target updated to 0x0123e601 |
+| `docs/actor-prompt-guide.md` | Binary path updated |
+| `CONTINUATION_PROMPT.md` | All addresses converted to 32-bit |
+| `AGENTS.md` | Gate references updated ([esi+0x17c]), notes about old [r15+0x208] |
+| `scripts/gdb_0x1d8_test.sh` | Converted to 32-bit GDB instructions (edi, esi, eip) |
+| `HANDOFF.md` | This file |
 
-### 6. SC2 Custom Reports (0x003c) — CCCD Not Always Enabled (MEDIUM PRIORITY)
-- **Status**: CCCD on handle 0x003c not always written by BlueZ hog-ll after reconnect. Host sees generic gamepad instead of full SC2. Trackpads, gyro, and back buttons still work (data flows on 0x0033).
-- **What to try**:
-  1. Investigate why hog-ll sometimes skips 0x003c CCCD write
-  2. Check if dual notification targets (Valve Custom Service + HID Service CHR_REPORT) cause confusion
-  3. Compare btmon captures between successful and failed CCCD enables
+## Behavior Changes
 
-### 7. Command Routing (MEDIUM PRIORITY)
-- **Status**: 0x85/0x8D swapped. Per protocol doc, 0x85 = SET_DEFAULT_DIGITAL_MAPPINGS, 0x8D = SET_CONTROLLER_MODE. Code has them reversed.
-- **Fix**: Swap the routing in `main_l2cap.py:556-564`.
+**Source code**: None. All protocol behavior is identical. Only diagnostics were added. The ATT correctness fixes (INVALID_OFFSET, PDU validation, MTU caps) are spec-compliant and should not change observed behavior for well-behaved hosts.
 
-### 8. GET_SERIAL Format (FIXED)
-- **Status**: FIXED in current commit. byte[1] changed from 0x14 to 0x15 (matches write command). Serial must start with 'F' (0x46) to pass V_strncmp validation at 0x26b1ac0.
-- **Validation**: `V_strncmp` at 0x26b1ac0 compares first byte of serial against pattern at 0xd69c60 (first byte = 0x46 = 'F'). If validation fails, serial is replaced with "DOCKED_SLOT".
-- **Response format** (23 bytes):
-  ```
-  byte[0] = 0xAE (command echo)
-  byte[1] = 0x15 (payload length, matches write command byte[1])
-  byte[2] = 0x01 (success status)
-  bytes[3-22] = serial number (20 bytes, starts with 'F')
-  ```
+**Documentation only**: All reverse engineering analysis files updated from 64-bit to 32-bit binary addresses. No code behavior changed.
 
-### 9. Dual Trackpads & IMU (Gyro/Accel) Forwarding
-- **Status**: 45-byte SC2 Custom report with trackpad X/Y, IMU (accel/gyro), and force sensors is **already implemented** in `input_handler.py`. The data flows correctly from Neptune HID → SC2 report.
-- **Remaining**: Steam may need specific settings enabled to activate gyro/trackpad features (registers 0x27 IMU_MODE, etc.). CCCDs on 0x003c must be enabled first.
+## Diagnostics Added
 
-### 10. Auto-Reconnect Daemon
-- **Status**: Advertising refresh on disconnect is **already implemented** in `main_l2cap.py:_schedule_adv_refresh()`.
-- **Remaining**: Ensure clean re-advertising after disconnects without manual intervention.
-- **Key commands in the SC2 protocol flow**:
-  1. `0x83` GET_ATTRIBUTES → response: `[0x83, 0x2D, 9 attributes x 5 bytes, padding]`
-  2. `0xF2` Unknown (1-byte payload varies: 0x01, 0x02, etc.) → response: `[0xF2, 0x00, zeros]` (STILL WRONG — needs real SC2 capture)
-  3. `0xAE` GET_SERIAL → response: `[0xAE, 0x15, 0x01, serial_ascii, padding]`
-  4. `0xBA` GET_CHIP_ID → response: `[0xBA, 0x11, 0x00, 15-byte chip_id, padding]`
-  5. `0x87` SET_SETTINGS → write-only (configures registers), verification read NEVER happens (by design — SDL3 confirms fire-and-forget)
-  6. `0x89` GET_SETTINGS_VALUES → response: stored register values
-  7. `0xC1`/`0xDC`/0xE2` Unknown → echo with zero payload
-  8. `0x81` CLEAR_MAPPINGS → write-only (exits lizard mode)
-  9. `0x85` SET_DEFAULT_DIGITAL_MAPPINGS → write-only (enters gamepad mode)
-  10. `0x8D` SET_CONTROLLER_MODE → mode switch (lizard ↔ Steam Input)
+- `SPOOFDECK_PROTO_LOG=1` enables structured JSON logging to stderr
+- Log lines cover: ATT writes, ATT reads, SC2 commands, haptic writes, notifications (sent and dropped)
+- Each log line includes: monotonic timestamp, event type, opcode, handle, payload hex, SC2 command name, response data
+- `scripts/extract_proto_trace.py` parses these logs into a human-readable report or CSV
 
-### 11. Reverse Engineering Findings (from steamclient.so)
-- **ControllerDetails_tE**: 84 bytes (0x54), ready_flag at offset 0x3c must be 1. Set by QueueFetchingControllerDetails at 0x01092820. Fields come from controller object offsets 0x84-0xd4.
-- **Product ID check**: 0x1303 is in recognized range (0x1302-0x1305). Other recognized types: 0x1142, 0x1220, 0x1201-0x1206, 0x1101-0x1102.
-- **Haptic path**: Uses SDL_hid_write() (output reports), NOT SDL_hid_send_feature_report(). Report ID 0x80, 10 bytes. Lizard mode must be OFF for haptics to work. In-game rumble via SDL_RumbleJoystick() works end-to-end. Steam-generated haptics (trackpad clicks, UI feedback) do not reach Neptune motors because 0x8F never dispatched — the `[rdi+0x1d8]` theory is UNVERIFIED.
-- **SET_SETTINGS is fire-and-forget**: SDL3 confirms no `SDL_hid_get_feature_report()` after send. State machine at 0x010d466b skips VERIFY because r13 is NULL. `[r15+0x208]` is a "test mode" flag — always 0 in normal BLE operation.
-- **0x1070620 is the zombie check / registration identity gate**: 7-check gate function. Checks bounds, vtable, connection state (1 or 4), and **slot ready flag at controller+slot*0xe8+0x200**. Same function used by both zombie check and registration.
-- **Identity slot populated by feature report processing**: Code at 0x10d4e6c processes GET_ATTRIBUTES/GET_SERIAL/0xf2 responses and writes to identity slot. Unique ID at slot+0x200 is the serial number — first byte MUST be non-zero.
-- **Serial validation**: V_strncmp at 0x26b1ac0 checks first byte == 'F' (0x46). Pattern at 0xd69c60.
-- **CGetControllerInfoWorkItem**: Reads controller details from IPC pipe (hiddevicepipesteam.cpp). Retries 51 times with 100ms sleep. Fails because IPC pipe read returns 0 bytes. Does NOT block registration — only affects account queries.
-- **CHIDIOThread**: Processes HID I/O work items. String at 0x00d6fbc2. SET_SETTINGS work items are queued here.
-- **IPC pipe**: hiddevicepipesteam.cpp (string at 0x00c8ce9a). Connects steamclient.so to CHIDIOThread. Uses protobuf messages (CHIDMessageToRemote/CHIDMessageFromRemote).
-- **SDL_hid_send_feature_report**: Resolved via dlsym at 0x01760fa2, stored at 0x02c69a28.
-- **0xf2 command**: Per-category capability query dispatched via switch/case. Response format: `[0xf2, category, length, data...]`.
-- **Encryption error**: `set_report_cb() Error: Encryption Key Size is insufficient` is PRE-EXISTING. Persists without BT_SECURITY_MEDIUM. BlueZ HOG profile internal issue.
-- **RE session files**: research/steamclient-reverse-session/ contains findings.md, functions/, notes/
-  - `functions/controller_identity_check.c` — 0x1070620 disassembly (7-check gate)
-  - `functions/registration_data_flow.c` — What data registration needs from ATT server
-  - `functions/zombie_disconnect.c` — Zombie check conditions (state-based, not timer)
-  - `functions/serial_validation.c` — V_strncmp validation (first byte == 'F')
-  - `functions/serial_format.c` — Serial number format requirements
-  - `functions/slot_data_population.c` — Identity slot vs ControllerDetails analysis
-  - `functions/get_attributes_format.c` — GET_ATTRIBUTES response format
-  - `functions/get_serial_format.c` — GET_SERIAL response format (byte[1]=0x15)
-  - `functions/notification_trigger.c` — Why ATT notifications won't trigger feature report processing
-  - `functions/ipc_pipe_fix.c` — IPC pipe analysis (populates ControllerDetails, not identity slot)
-  - `functions/handshake_completion.c` — SET_SETTINGS retry is noise, registration runs independently
-  - `functions/hid_write_failure.c` — vtable[0x10] skipped because [r15+0x208]=0
-  - `functions/retry_mechanism.c` — 3-second retry for failed HID writes
-  - `functions/sdl3_verification.c` — SDL3 confirms fire-and-forget
-  - `functions/set_settings_path.c` — SET_SETTINGS goes through state machine
-  - `functions/verify_branch.c` — r13=NULL causes VERIFY skip
+## Offline Tests Run
 
----
+- `python3 -m py_compile src/att_server.py` — OK
+- `python3 -m py_compile src/main_l2cap.py` — OK
+- `python3 -m py_compile src/gatt_db.py` — OK
+- `python3 -m py_compile scripts/extract_proto_trace.py` — OK
+- `python3 scripts/extract_proto_trace.py --help` — OK
+- `grep` for stale 64-bit patterns — all remaining `linux64` and `r15+0x208` references are in historical context tags
+- Verified 52 string/function addresses from 32-bit binary via `strings`, `grep -boa`, `objdump`
+- All `.c` files in `research/steamclient-reverse-session/functions/` verified to have correct binary path
 
-## 4. How to Run & Verify
+## Tests Not Run
 
-### Start the Service on the Deck
+- BLE connection test (requires Deck + host with Bluetooth hardware)
+- Live protocol log capture (requires `SPOOFDECK_PROTO_LOG=1` on running Deck)
+- End-to-end haptics test (requires Steam Client + game)
+
+## Known Risks
+
+- **Minimal for source code**: All changes are additive diagnostics or spec-compliant fixes. Existing protocol behavior is unchanged.
+- **26 RE addresses need re-analysis**: Function entry points in the 0x015xxxxx and 0x010xxxxx ranges are marked `[NEEDS RE-ANALYSIS]`. These require GDB or disassembly of the running 32-bit Steam process to resolve. The GDB approach (`scripts/gdb_0x1d8_test.sh`) has been updated with 32-bit registers and offsets.
+- The `SPOOFDECK_PROTO_LOG=1` env var must be set at service start time (checked once at module import).
+- Structured log output goes to stderr (same as existing `print()` calls), so it will appear in `journalctl -u sc2-hogp`.
+
+## Ghidra Analysis Results
+
+Ghidra 11.3.1 installed at `~/ghidra`. Projects saved at `~/ghidra-projects/spoofdeck-32` and `spoofdeck-64`.
+
+**Key findings from decompiled C:**
+
+1. **Haptics root cause clarified**: The 0x8F TRIGGER_HAPTIC_PULSE command is never dispatched on BLE because the *entire initialization chain* stalls. The gate at `[esi+0x17c]` is not the direct blocker — the code that checks it is never reached. The initialization chain is:
+   ```
+   CHIDIOThread_Main (0x011b3a60)
+     → CWorkItemThread (0x011d5850)
+       → CGetControllerInfoWorkItem (0x01218840, retries 51x)
+         → EYldWaitForControllerDetails (0x011cee30, 2s timeout)
+           → gate SET at 0x0178a140
+   ```
+
+2. **SDL configuration**: Steam loads `libSDL3.so.0` at runtime and sets `SDL_JOYSTICK_HIDAPI_STEAM=1`. This means Steam uses SDL3's HIDAPI driver for Steam controllers, bypassing the kernel's `hid-steam` driver.
+
+3. **12 new verified function addresses** — see `research/32bit_ghidra_findings.md` for the full map.
+
+**Exported data** at `~/ghidra-projects/exports/32bit/`:
+- `functions.csv` — 141,351 functions
+- `strings.csv` — 56,317 strings
+- `controller_decompiled_32bit.txt` — decompiled C for 14 key controller functions
+- `controller_xrefs_32bit.txt` — xrefs to 12 controller strings
+- `call_graph.csv` — 16,494 call edges
+
+## Recommended Next Human Bluetooth Test
+
+1. Deploy to Deck:
+
+   ```bash
+   scripts/deploy.sh
+   ```
+
+2. Clear host BlueZ bond/cache:
+
+   ```bash
+   sudo rm -rf /var/lib/bluetooth/<HOST_BT_MAC>/C2:12:34:56:78:9A
+   sudo rm -rf /var/lib/bluetooth/cache
+   sudo systemctl restart bluetooth
+   ```
+
+3. Start the service with structured logging:
+
+   ```bash
+   SPOOFDECK_PROTO_LOG=1 systemd-run --unit=sc2-hogp \
+     --property=WorkingDirectory=/tmp/sc2-spoof \
+     python3 -u /tmp/sc2-spoof/src/main_l2cap.py --name "Steam Controller 2026"
+   ```
+
+4. Connect from host:
+
+   ```bash
+   bluetoothctl connect C2:12:34:56:78:9A
+   ```
+
+5. Wait 45 seconds (let Steam complete discovery and command handshake).
+
+6. Save Deck logs:
+
+   ```bash
+   journalctl -u sc2-hogp --no-pager > /tmp/hogp.log
+   ```
+
+7. Run the parser:
+
+   ```bash
+   python3 scripts/extract_proto_trace.py /tmp/hogp.log
+   ```
+
+8. Check counts for:
+   - `0xAE` GET_SERIAL (should appear 1-3 times; many retries on BLE would indicate a problem)
+   - `0xF2` CAPABILITY_QUERY_UNKNOWN
+   - `0x87` SET_SETTINGS_VALUES
+   - `0x81` CLEAR_DIGITAL_MAPPINGS
+   - `0x8F` TRIGGER_HAPTIC_PULSE (currently NOT expected — absence confirms Steam haptics path is separate)
+
+9. Save the BLE trace and fill out:
+
+   ```text
+   research/native_vs_ble_command_diff_TEMPLATE.md
+   ```
+
+10. For native comparison: repeat steps 1-7 with the real SC2 hardware connected via BLE, then compare traces.
+
+## Ghidra Automated RE (Resolve 26 Remaining Addresses)
+
+Ghidra 11.3.1 is installed at `~/ghidra`. Java 21 is available.
+
+### Quick Start (32-bit binary — priority)
+
+Run in a separate terminal (takes 2-6 hours):
+
 ```bash
-# 1. Restart bluetooth and apply custom LE config
-echo <DECK_PASSWORD> | sudo -S systemctl stop sc2-hogp bluetooth
-echo <DECK_PASSWORD> | sudo -S systemctl start bluetooth
-sleep 2
-echo <DECK_PASSWORD> | sudo -S python3 /tmp/config_bt.py
-
-# 2. Run the deployment script to copy latest code and start the service
-./scripts/deploy.sh
+bash ~/ghidra-projects/run_32bit.sh
 ```
 
-### Connect on the Host
+Or overnight (both binaries, 32-bit first):
+
 ```bash
-# Connect using bluetoothctl (avoid 'pair' to prevent BR/EDR classic bonding timeouts)
-bluetoothctl connect C2:12:34:56:78:9A
+nohup bash ~/ghidra-projects/run_overnight.sh > ~/ghidra-projects/exports/overnight.log 2>&1 &
 ```
 
-### Listen to Input Events on the Host
+### What It Does
+
+1. Imports `ubuntu12_32/steamclient.so` into a Ghidra project
+2. Runs full auto-analysis (decompilation, xref analysis, etc.)
+3. Exports function list, call graph, strings, and xrefs to CSV
+4. Searches for the 26 unverified function addresses by code pattern matching
+5. Then repeats for the 64-bit binary
+
+### Output Files
+
+After analysis completes, check:
+
 ```bash
-# Find and monitor relative mouse movement and keypress events
-echo <HOST_SUDO_PASSWORD> | sudo -S python3 -u scratch/listen_events.py
+# Key results — functions matching our search patterns
+cat ~/ghidra-projects/exports/32bit/unverified_results_32bit.txt
+
+# All functions (name, address, size, call counts)
+head -50 ~/ghidra-projects/exports/32bit/functions.csv
+
+# Disassembly of known key addresses
+cat ~/ghidra-projects/exports/32bit/key_disassembly.txt
+
+# Cross-references
+head -50 ~/ghidra-projects/exports/32bit/key_xrefs.csv
+
+# Call graph
+head -50 ~/ghidra-projects/exports/32bit/call_graph.csv
 ```
+
+### What We're Looking For
+
+The 26 unverified 64-bit addresses that need 32-bit equivalents:
+
+| 64-bit Address | What It Is | Search Pattern |
+|----------------|-----------|----------------|
+| `0x015675a8` | Controller message dispatcher | Reads `[edi+0x1d8]`, switch/jump table |
+| `0x015677f4` | YieldingRunTestProgram allocation | Calls job allocator, sets gate |
+| `0x01558bb0` | Controller constructor | Writes to `[esi+0x1d8]`, reads `[esi+0x1b0]` |
+| `0x01551560` | Controller destructor | Reads `[esi+0x1d8]` as pointer, cleanup |
+| `0x0156d6a0` | Job context allocator | Called from YRT and other Yielding* functions |
+| `0x0156d8a1` | Gate clear | `mov byte [reg+0x17c], 0` |
+| `0x01559070` | Graphics API type writer | Writes values 1-4 to `[obj+0x1d8]` |
+| `0x0119f3b1` | Gate clear instruction | Same as gate clear |
+| `0x015647f5` | GL write (edx=1) | Writes 1 to `[obj+0x1d8]` |
+| `0x01564857` | GL D3D variant (edx=1) | Same pattern |
+| `0x015648bc` | Vulkan write (edx=2) | Writes 2 to `[obj+0x1d8]` |
+| `0x0156323f` | D3D12 path A (edx=3) | Writes 3 to `[obj+0x1d8]` |
+| `0x015632e1` | D3D12 path B (edx=4) | Writes 4 to `[obj+0x1d8]` |
+| `0x017252a0` | Haptic trigger (dead code) | Zero callers |
+| `0x00f907c5` | Sub-vtable pointer set | Writes to vtable slot |
+| `0x00f912bb` | Sub-vtable pointer set (alt) | Same pattern |
+| `0x010xxxxx` range | Identity/registration functions | ~8 functions |
+
+### After Analysis
+
+Once you have the addresses, update:
+- `research/steamclient-reverse-session/findings.md`
+- `docs/findings-backlog.md`
+- `docs/investigation-plan.md`
+- All `.c` files in `research/steamclient-reverse-session/functions/`
+
+Replace `[NEEDS RE-ANALYSIS]` tags with the actual 32-bit addresses.

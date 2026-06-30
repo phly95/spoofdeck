@@ -1,7 +1,7 @@
 /*
  * 0xf2 Response Format — Analysis
  *
- * Binary: ~/.steam/debian-installation/linux64/steamclient.so
+ * Binary: ~/.steam/debian-installation/ubuntu12_32/steamclient.so (32-bit, 49MB)
  * Status: PARTIALLY DETERMINED
  *
  * ============================================================
@@ -42,19 +42,19 @@
  *
  * The state machine at 0x10d4e6c is called periodically to process
  * ongoing feature report reads. It iterates through settings entries
- * at [r15+0xc0] (16-byte entries), each with a command byte and
+ * at [esi+0xc0] (16-byte entries), each with a command byte and
  * response data.
  *
- * The state machine structure (r15 = controller object):
- *   [r15+0xb8]: total number of settings entries
- *   [r15+0xc0]: settings array (16 bytes per entry)
- *   [r15+0xd0]: pending entry count
- *   [r15+0xe0]: command byte (e.g., 0x87 for SET_SETTINGS)
- *   [r15+0xe1]: response flag
- *   [r15+0xe4]: current entry index
- *   [r15+0x198]: report ID for feature report
- *   [r15+0x1f8]: flag byte
- *   [r15+0x208]: HID connection established flag
+ * The state machine structure (esi = controller object):
+ *   [esi+0xb8]: total number of settings entries
+ *   [esi+0xc0]: settings array (16 bytes per entry)
+ *   [esi+0xd0]: pending entry count
+ *   [esi+0xe0]: command byte (e.g., 0x87 for SET_SETTINGS)
+ *   [esi+0xe1]: response flag
+ *   [esi+0xe4]: current entry index
+ *   [esi+0x198]: report ID for feature report
+ *   [esi+0x1f8]: flag byte
+ *   [esi+0x17c]: HID connection established flag
  *
  * The 0xf2 command is likely one of the settings entries that
  * gets dispatched through the vtable call at 0x10d509d:
@@ -123,7 +123,7 @@
 ⚠️ DISCLAIMER: WRONG BINARY ANALYZED
 
 All analysis in this file was performed on the WRONG binary:
-  ~/.steam/debian-installation/linux64/steamclient.so (46MB, 64-bit x86_64)
+  ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit) [CORRECT]
 
 Steam actually loads:
   ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit i386)

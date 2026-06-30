@@ -47,21 +47,21 @@ Deploy one change, capture results, evaluate. Don't add diagnostic logging AND f
 | SET_SETTINGS notification hypothesis DISPROVEN | Test caused ghost inputs, reverted (2026-06-28) | Confirmed |
 | `set_report()` is kernel-initiated (device probe), NOT triggered by Steam writes | BlueZ 5.86 source analysis, hog-lib.c lines 845-900 | Confirmed |
 | `0x17252a0` is dead code (zero callers) | Multiple analysis methods agree | Confirmed |
-| **0x8F gate (VERIFIED)**: `[r15+0x208]` at `0x10d4da0` gates 0x8F dispatch. `YieldingRunTestProgram` at `0x015677f4` is the ONLY setter (instruction at `0x0156781c`: `mov byte [r15+0x208], 1`). On native, flag set during init → 0x8F dispatched. On BLE, flag stays 0 → 0x8F never dispatched. Dispatcher at `0x015675a8` branches on `[rdi+0x1d8]`: state 1-2 → YieldingRunTestProgram path, state 3-4 → different path. **However, what 0x1d8 represents is UNVERIFIED** — may be graphics API type (1=GL, 2=Vulkan, 3/4=D3D12) not controller state. Values 3/4 never written as immediates. GDB watchpoint is the definitive test. | Native Deck strace capture (124 HIDIOCSFEATURE, 16 are 0x8F) + BLE ATT logs (0x8F never appears). | Confirmed (gate), Unverified (0x1d8 meaning) |
+| **0x8F gate (VERIFIED)**: `[esi+0x17c]` [64-bit: `[r15+0x208]`] at `0x0123e5fb` [64-bit: `0x10d4da0`] gates 0x8F dispatch. `YieldingRunTestProgram` at [NEEDS RE-ANALYSIS] [64-bit: `0x015677f4`] is the ONLY setter (instruction at `0x0178a140` [64-bit: `0x0156781c`]: `mov byte [esi+0x17c], 1`). On native, flag set during init → 0x8F dispatched. On BLE, flag stays 0 → 0x8F never dispatched. Dispatcher at [NEEDS RE-ANALYSIS] [64-bit: `0x015675a8`] branches on `[edi+0x1d8]` [64-bit: `[rdi+0x1d8]`]: state 1-2 → YieldingRunTestProgram path, state 3-4 → different path. **However, what 0x1d8 represents is UNVERIFIED** — may be graphics API type (1=GL, 2=Vulkan, 3/4=D3D12) not controller state. Values 3/4 never written as immediates. GDB watchpoint is the definitive test. | Native Deck strace capture (124 HIDIOCSFEATURE, 16 are 0x8F) + BLE ATT logs (0x8F never appears). | Confirmed (gate), Unverified (0x1d8 meaning) |
 | **Controller IS registered on BLE**: serial "F0000-0000-00000000" accepted by Steam. "Skipping usage report" is normal. | Steam logs show "Auto-Registering controller: F0000-0000-00000000" | Confirmed |
 | **BLE connection drops after ~30s** | Live test 2026-06-29: supervision timeout | Confirmed |
 | **Native vs BLE GET_SERIAL differs**: Native write data `ae 15 01 05 12...`, BLE: `ae 15 04 00 34 5e...`. Our handler ignores write data. | strace capture vs ATT logs | Confirmed |
 
 ## What We Don't Know
 
-> **⚠️ NOTE: All binary addresses below are from the 64-bit binary. Steam loads the 32-bit binary. Addresses must be re-derived or verified via GDB.**
+> **⚠️ NOTE: All binary addresses below are from the 32-bit binary (`ubuntu12_32/steamclient.so`).** 64-bit equivalents from the old analysis are shown in `[64-bit: ...]` brackets. Addresses marked `[NEEDS RE-ANALYSIS]` have not been verified in the 32-bit binary. **Do NOT use 64-bit addresses for GDB or binary patching.**
 
 | Question | Current Best Guess | What Would Confirm/Refute |
 |----------|-------------------|--------------------------|
 | Why does Steam retry GET_SERIAL 19+ times on BLE? | Native and BLE send different serial hashes. Steam may compute a hash from the write data and compare it to the response. | Test with native serial hash format to see if retry count drops. |
 | What does `[rdi+0x1d8]` actually hold for BLE devices? | **UNVERIFIED** — May be graphics API type (1=GL, 2=Vulkan, 3/4=D3D12) instead of controller state. Values 3/4 never written as immediates. | GDB watchpoint on `[rdi+0x1d8]` during BLE connection init — 5-minute test vs hours of static analysis. |
-| What triggers the call to `0x015675a8`? | Invoked indirectly via vtable dispatch during controller registration. Vtable is runtime-constructed. | GDB backtrace from breakpoint at `0x015675a8`. |
-| Will the LD_PRELOAD patch work? | 55-65% probability. BUT first verify what [rdi+0x1d8] holds — if it's not a controller state, the dispatcher logic may be different from what we think. | GDB watchpoint first, then LD_PRELOAD if dispatcher path is confirmed. |
+| What triggers the call to [NEEDS RE-ANALYSIS] [64-bit: `0x015675a8`]? | Invoked indirectly via vtable dispatch during controller registration. Vtable is runtime-constructed. | GDB backtrace from breakpoint at [NEEDS RE-ANALYSIS] [64-bit: `0x015675a8`]. |
+| Will the LD_PRELOAD patch work? | 55-65% probability. BUT first verify what [edi+0x1d8] holds — if it's not a controller state, the dispatcher logic may be different from what we think. | GDB watchpoint first, then LD_PRELOAD if dispatcher path is confirmed. |
 | Why is [r12+0x08] BLE flag never read? | The handler sets this flag but it's never consumed. The BLE vs USB distinction may be made elsewhere (product ID dispatch, protobuf enum, etc.). | GDB trace on reads to handler+0x08 during connection init. |
 
 ---
@@ -109,31 +109,31 @@ Add to `_handle_write_cmd()` AND `_handle_write()` in `att_server.py`:
 5. Capture Deck logs
 6. Compare btmon vs Deck logs — do they agree?
 
-### Step 4: GDB Watchpoint on [rdi+0x1d8] (RECOMMENDED NEXT STEP)
+### Step 4: GDB Watchpoint on [edi+0x1d8] (RECOMMENDED NEXT STEP)
 
-The root cause of the gate mechanism is fully verified: `[r15+0x208]` at `0x10d4da0` stays 0 on BLE, so 0x8F is never dispatched. The only setter is `YieldingRunTestProgram` at `0x0156781c`, reached through a controller message dispatcher at `0x015675a8` that branches on `[rdi+0x1d8]`.
+The root cause of the gate mechanism is fully verified: `[esi+0x17c]` [64-bit: `[r15+0x208]`] at `0x0123e5fb` [64-bit: `0x10d4da0`] stays 0 on BLE, so 0x8F is never dispatched. The only setter is `YieldingRunTestProgram` at `0x0178a140` [64-bit: `0x0156781c`], reached through a controller message dispatcher at [NEEDS RE-ANALYSIS] [64-bit: `0x015675a8`] that branches on `[edi+0x1d8]` [64-bit: `[rdi+0x1d8]`].
 
-**However, what `[rdi+0x1d8]` represents is UNVERIFIED.** Recent investigation found:
-- The function at `0x01559070` writes `[object+0x1d8]` = graphics API type (1=GL, 2=Vulkan, 3=D3D12, 4=D3D12)
+**However, what `[edi+0x1d8]` represents is UNVERIFIED.** Recent investigation found:
+- The function at [NEEDS RE-ANALYSIS] [64-bit: `0x01559070`] writes `[object+0x1d8]` = graphics API type (1=GL, 2=Vulkan, 3=D3D12, 4=D3D12)
 - Values 3 and 4 are NEVER written as immediate values to 0x1d8
-- The BLE handler at `0x010c4e0c` sets `[r12+0x08] = 1` (BLE flag) but this is NEVER READ
+- The BLE handler at [NEEDS RE-ANALYSIS] [64-bit: `0x010c4e0c`] sets `[ebp+0x08] = 1` (BLE flag, [64-bit: `[r12+0x08]`]) but this is NEVER READ
 - The controller constructor reads `[parent+0x1B0]` into `[controller+0x1d8]`, but it gets overwritten later
-- The vtable containing `0x015675a8` is runtime-constructed
+- The vtable containing [NEEDS RE-ANALYSIS] [64-bit: `0x015675a8`] is runtime-constructed
 
 **Meta-lesson: Static analysis produced contradictory findings. A 5-minute GDB watchpoint would resolve this definitively.**
 
-**Recommended approach**: Set a GDB watchpoint on `[rdi+0x1d8]` during BLE connection init:
-1. Attach GDB to steamclient.so process
-2. Set watchpoint: `watch *(uint32_t*)(rdi + 0x1d8)`
+**Recommended approach**: Set a GDB watchpoint on `[edi+0x1d8]` during BLE connection init:
+1. Attach GDB to steamclient.so process (loads `ubuntu12_32/steamclient.so`, NOT `linux64/steamclient.so`)
+2. Set watchpoint: `watch *(uint32_t*)(edi + 0x1d8)`
 3. Trigger BLE connection
-4. Observe what value is read by the dispatcher at `0x015675a8`
+4. Observe what value is read by the dispatcher at [NEEDS RE-ANALYSIS] [64-bit: `0x015675a8`]
 5. This reveals whether 0x1d8 is a controller state, graphics API type, or something else
 
 **Expected outcomes:**
 - **If value is 1-2**: The "state 1-2 vs 3-4" theory is confirmed. LD_PRELOAD patch is the next step.
 - **If value is 3-4**: Confirms BLE gets different state. Need to understand WHY and how to change it.
 - **If value is something else entirely**: The dispatcher logic is different from what static analysis suggests. Need to re-examine the branching.
-- **If watchpoint never fires**: The dispatcher at `0x015675a8` may not be the right function. Need to trace how 0x8F dispatch actually works.
+- **If watchpoint never fires**: The dispatcher at [NEEDS RE-ANALYSIS] [64-bit: `0x015675a8`] may not be the right function. Need to trace how 0x8F dispatch actually works.
 
 ### Step 5: ~~SET_SETTINGS Notification~~ DISPROVEN
 
@@ -141,12 +141,12 @@ The SET_SETTINGS notification hypothesis was tested on 2026-06-28 and **failed**
 
 ### Step 6: LD_PRELOAD Implementation (AFTER Step 4 GDB Verification)
 
-**Prerequisite**: GDB watchpoint in Step 4 must confirm what `[rdi+0x1d8]` holds and that the dispatcher at `0x015675a8` is the right function.
+**Prerequisite**: GDB watchpoint in Step 4 must confirm what `[edi+0x1d8]` holds and that the dispatcher at [NEEDS RE-ANALYSIS] [64-bit: `0x015675a8`] is the right function.
 
-1. Build C library that patches `je 0x10d4fd0` at `0x10d4da6` to `nop nop`
+1. Build C library that patches `je [target]` at `0x0123e601` [64-bit: `0x10d4da6`] to `nop nop`
 2. Deploy to Deck, test with `LD_PRELOAD=/path/to/libpatch.so`
 3. If Steam haptics start working → done, commit the library
-4. If Steam crashes → GDB watchpoint on `[r15+0x208]` reveals gate controller
+4. If Steam crashes → GDB watchpoint on `[esi+0x17c]` [64-bit: `[r15+0x208]`] reveals gate controller
 5. If no change → secondary gate exists, continue investigation
 
 ---
@@ -175,4 +175,4 @@ The SET_SETTINGS notification hypothesis was tested on 2026-06-28 and **failed**
 
 ---
 
-*Last updated: 2026-06-29 (evening — parallel subagent investigation findings)*
+*Last updated: 2026-06-30 (addresses converted from 64-bit to 32-bit equivalents)*

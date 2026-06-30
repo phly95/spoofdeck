@@ -1,20 +1,23 @@
-⚠️ DISCLAIMER: WRONG BINARY ANALYZED
+⚠️ DISCLAIMER: ADDRESSES CONVERTED TO 32-BIT WHERE POSSIBLE
 
-All analysis in this file was performed on the WRONG binary:
+All analysis in this file was originally performed on the WRONG binary:
   ~/.steam/debian-installation/linux64/steamclient.so (46MB, 64-bit x86_64)
 
 Steam actually loads:
   ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit i386)
 
-ALL ADDRESSES, FUNCTION OFFSETS, AND DISASSEMBLY ARE WRONG for the running process.
+Addresses have been converted to 32-bit equivalents where verified.
+Addresses marked [32-bit: NEEDS RE-ANALYSIS] are still from the 64-bit binary
+and must be re-derived from the 32-bit binary or verified via GDB.
 The conceptual findings (gate mechanism, YieldingRunTestProgram, job system) likely
-apply to both binaries, but every specific address must be re-derived from the
-32-bit binary or verified via GDB on the running process.
+apply to both binaries.
 
-Verified: 2026-06-29
+Verified: 2026-06-30
 - Steam process: ELF 32-bit LSB pie executable (i386)
 - steamclient.so loaded: ubuntu12_32/steamclient.so
 - YieldingRunTestProgram string: 0x00bfc7e3 (32-bit) vs 0x00d6d17b (64-bit)
+- Gate offset: 0x17c (32-bit) vs 0x208 (64-bit)
+- Gate register: esi (32-bit) vs r15 (64-bit)
 
 # SC2 BLE Handshake Protocol - Reverse Engineering Findings
 
@@ -71,7 +74,7 @@ The 1-byte payload (0x01, 0x02, etc.) is likely a **category index** that select
 
 ### Supporting Evidence
 
-1. **The `EYldWaitForControllerDetails` function** at `0x0107e1c70` waits for controller details to be populated. The timeout (2 seconds) suggests this is waiting for multiple feature report responses.
+1. **The `EYldWaitForControllerDetails` function** at `0x0107e1c70` [32-bit: NEEDS RE-ANALYSIS] waits for controller details to be populated. The timeout (2 seconds) suggests this is waiting for multiple feature report responses.
 
 2. **The `QueueFetchingControllerDetails` function** at `0x01092820` receives the populated ControllerDetails_tE and sets the ready flag. This happens AFTER all feature reports have been read.
 
@@ -103,7 +106,7 @@ From the disassembly of `QueueFetchingControllerDetails` at `0x01092820`:
 
 ```asm
 ; At address 0x010929bf:
-mov dword [r15 + 0x3c], 1    ; Set ready_flag = 1
+mov dword [esi + 0x3c], 1    ; Set ready_flag = 1
 ```
 
 This instruction sets the byte at offset 0x3c of the ControllerDetails_tE struct to 1, which unblocks the yield function.
@@ -287,8 +290,8 @@ Haptic commands are sent via:
 
 ### Caller Function Found
 
-- **Location**: VA 0x010b2ca0 (function start)
-- **Calls QueueFetchingControllerDetails**: At VA 0x010b2e53
+- **Location**: VA 0x010b2ca0 [32-bit: NEEDS RE-ANALYSIS] (function start)
+- **Calls QueueFetchingControllerDetails**: At VA 0x010b2e53 [32-bit: NEEDS RE-ANALYSIS]
 
 ### Pseudocode
 
@@ -326,7 +329,7 @@ void CallerOfQueueFetchingControllerDetails(CSteamController* controller) {
 1. **ControllerDetails fields come from controller object offsets 0x84-0xd4**
 2. **Product ID check at offset 0x8a** validates against known Steam Controller types
 3. **SC2 product IDs (0x1302-0x1305) are explicitly recognized**
-4. **The function at 0x15a6880 is called after QueueFetchingControllerDetails** - this may further process the details
+4. **The function at 0x15a6880** [32-bit: NEEDS RE-ANALYSIS] is called after QueueFetchingControllerDetails** - this may further process the details
 
 ---
 
@@ -397,7 +400,7 @@ The SC2 controller processes SET_SETTINGS internally. It does NOT echo back the 
 ### The 3-Second Retry Explained
 
 The retry is NOT verification failure. It's the state machine's normal operation:
-1. SET_SETTINGS entry is added to settings array at `[r15+0xc0]`
+1. SET_SETTINGS entry is added to settings array at `[esi+0xc0]`
 2. State machine tries to send via `vtable[0x10]`
 3. If HID write fails, entry remains in array
 4. State machine re-processes every ~3 seconds
@@ -431,9 +434,9 @@ The retry is NOT verification failure. It's the state machine's normal operation
 - Critical branch: `0x010d4e6c` (test r13, r13 → je skip verify)
 - Verify call: `0x010d4e83` (vtable[0x130]) — only reached if r13 != NULL
 - Send call: `0x010d4e14` (vtable[0x10]) — always reached
-- Settings array: `[r15+0xc0]` (16-byte entries)
-- Command byte: `[r15+0xe0]` (0x87 for SET_SETTINGS)
-- Report ID: `[r15+0x198]`
+- Settings array: `[esi+0xc0]` (16-byte entries)
+- Command byte: `[esi+0xe0]` (0x87 for SET_SETTINGS)
+- Report ID: `[esi+0x198]`
 - `CExitLizardModeWorkItem` RTTI at `0x00aa19e0`
 - `toggle_lizard` URI at `0x00ca6b5d`
 
@@ -661,10 +664,10 @@ Runtime state tracking via bitfield. Bit 39 = "wired" check.
 
 | String | VA | Transport |
 |--------|-----|-----------|
-| "Controller uses V1 HID protocol" | 0x00cef4d0 | Generic |
+| "Controller uses V1 HID protocol" | 0x00b98168 | Generic |
 | "Controller uses V1 HID protocol via USB" | 0x00cf1150 | USB |
-| "Controller uses V1 HID protocol via Dongle" | 0x00d216e0 | Dongle |
-| "Controller uses V1 HID protocol via BLE" | 0x00d30ce0 | BLE |
+| "Controller uses V1 HID protocol via Dongle" | 0x00ba2bac | Dongle |
+| "Controller uses V1 HID protocol via BLE" | 0x00ba2c28 | BLE |
 
 ---
 
@@ -684,46 +687,46 @@ Runtime state tracking via bitfield. Bit 39 = "wired" check.
 | TASK 6: set_report_cb Error | **Complete** | In bluetoothd, ATT error 0x0E from SC2 rejecting Write Request |
 | TASK 7: Connection Detection | **Complete** | Product ID dispatch, BLE flag, bitfield, protobuf enum |
 | TASK 8: Handshake Completion | **Complete** | **Handshake completes despite retries — SET_SETTINGS is noise, not blocker** |
-| TASK 9: vtable[0x10] Failure | **Complete** | **[r15+0x208]==0 causes dispatch skip — HID connection never established** |
+| TASK 9: vtable[0x10] Failure | **Complete** | **[esi+0x17c]==0 causes dispatch skip — HID connection never established** |
 | TASK 10: Retry Mechanism | **Complete** | **No retry limit, 3s polling, settings never consumed, runs forever** |
 | TASK 11: CGetControllerInfoWorkItem | **Complete** | **Reads via vtable+0x28 (DeviceRead IPC), retries 51 times, 100ms sleep, ~20s timeout** |
 | TASK 12: IPC Message Format | **Complete** | **CHIDMessageToRemote.DeviceRead → RequestResponse with data field** |
 | TASK 13: Zombie Disconnect | **Complete** | **State-based: slot state==3, flag==0x10b4==0, connection state!=1&&!=4** |
-| TASK 14: Registration Requirements | **Complete** | **Needs controller identity (0x1070620), not CGetControllerInfoWorkItem** |
-| TASK 15: Controller Identity Check (0x1070620) | **Complete** | **Same function for registration AND zombie check. Checks connection state + slot ready flag. Returns 1 if both pass.** |
+| TASK 14: Registration Requirements | **Complete** | **Needs controller identity (0x1070620 [32-bit: NEEDS RE-ANALYSIS]), not CGetControllerInfoWorkItem** |
+| TASK 15: Controller Identity Check (0x1070620 [32-bit: NEEDS RE-ANALYSIS]) | **Complete** | **Same function for registration AND zombie check. Checks connection state + slot ready flag. Returns 1 if both pass.** |
 | TASK 16: Registration Identity Failure | **Complete** | **No retry within function. Logs "couldn't get identity". Controller becomes zombie.** |
-| TASK 17: Zombie vs Identity | **Complete** | **SAME FUNCTION (0x1070620). Called from slot iterator at 0x1072106 and registration at 0x10b3bac.** |
+| TASK 17: Zombie vs Identity | **Complete** | **SAME FUNCTION (0x1070620 [32-bit: NEEDS RE-ANALYSIS]). Called from slot iterator at 0x1072106 [32-bit: NEEDS RE-ANALYSIS] and registration at 0x10b3bac [32-bit: NEEDS RE-ANALYSIS].** |
 | TASK 18: Registration Data Flow | **Complete** | **Needs slot ready flag (offset 0x200 != 0). Populated by feature report handshake. Our ATT server must provide correct serial/capability data.** |
 | TASK 19: Two Separate Data Structures | **Complete** | **CRITICAL CLARIFICATION: ControllerDetails_tE (0x54, at 0x1070+id*0x54) and Identity Slot (0xe8, at slot*0xe8+0x1f8) are DIFFERENT. QueueFetchingControllerDetails writes to ControllerDetails. GetControllerInfo reads from Identity Slot. The identity slot is populated by feature report response processing.** |
 
 ---
 
-## TASK 15: Controller Identity Check — 0x1070620 (CRITICAL)
+## TASK 15: Controller Identity Check — 0x1070620 [32-bit: NEEDS RE-ANALYSIS] (CRITICAL)
 
 ### Status: **DETERMINED**
 
 ### Key Discovery: Same Function for Registration AND Zombie Check
 
-**0x1070620 is called from TWO places:**
-1. `BYieldingRegisterSteamController` at `0x10b3bac` — registration identity gate
+**0x1070620** [32-bit: NEEDS RE-ANALYSIS] **is called from TWO places:**
+1. `BYieldingRegisterSteamController` at `0x10b3bac` [32-bit: NEEDS RE-ANALYSIS] — registration identity gate
 2. Slot iterator (zombie check) at `0x1072106` — zombie disconnect decision
 
-### What 0x1070620 Checks
+### What 0x1070620 [32-bit: NEEDS RE-ANALYSIS] Checks
 
 The function performs 7 checks in order:
 
 | # | Check | Address | Condition | Failure |
 |---|-------|---------|-----------|---------|
-| 1 | Bounds | `0x1070643` | `slot_index <= 15` | return 0 |
-| 2 | Vtable | `0x1070655` | `vtable[0x60] == 0x104e5e0` | alternate path |
-| 3 | Flag byte | `0x1070662` | `[obj+0x1091fd] == 0` | use offset 0x180 |
-| 4 | Connection | `0x107066f` | `[obj+0x190] != NULL` | return 0 |
-| 5 | Connection state | `0x107069c` | `vtable[0x18]()` returns state 1 or 4 | return 0 |
-| 6 | Slot ready | `0x107088c` | `[slot+0x200] != 0` | return 0 |
-| 7 | Mutex copy | `0x10708a0` | copies identity data to output | — |
+| 1 | Bounds | `0x1070643` [32-bit: NEEDS RE-ANALYSIS] | `slot_index <= 15` | return 0 |
+| 2 | Vtable | `0x1070655` [32-bit: NEEDS RE-ANALYSIS] | `vtable[0x60] == 0x104e5e0` | alternate path |
+| 3 | Flag byte | `0x1070662` [32-bit: NEEDS RE-ANALYSIS] | `[obj+0x1091fd] == 0` | use offset 0x180 |
+| 4 | Connection | `0x107066f` [32-bit: NEEDS RE-ANALYSIS] | `[obj+0x190] != NULL` | return 0 |
+| 5 | Connection state | `0x107069c` [32-bit: NEEDS RE-ANALYSIS] | `vtable[0x18]()` returns state 1 or 4 | return 0 |
+| 6 | Slot ready | `0x107088c` [32-bit: NEEDS RE-ANALYSIS] | `[slot+0x200] != 0` | return 0 |
+| 7 | Mutex copy | `0x10708a0` [32-bit: NEEDS RE-ANALYSIS] | copies identity data to output | — |
 
 ### Return Value
-- `r14d = 1` → success (set at `0x1070a54` after data copy)
+- `r14d = 1` → success (set at `0x1070a54` [32-bit: NEEDS RE-ANALYSIS] after data copy)
 - `r14d = 0` → failure (default, never changed on failure paths)
 
 ### Slot Ready Flag: THE CRITICAL BYTE
@@ -753,7 +756,7 @@ This byte is the first byte of the `unique_id` field. When the feature report ha
 | 0x7c+ | various | calibration | slot[0x274+] |
 
 ### XREFs
-- `0x10b3bac` — BYieldingRegisterSteamController
+- `0x10b3bac` [32-bit: NEEDS RE-ANALYSIS] — BYieldingRegisterSteamController
 - `0x1072106` — zombie check slot iterator
 
 ---
@@ -764,7 +767,7 @@ This byte is the first byte of the `unique_id` field. When the feature report ha
 
 ### No Retry Within Function
 
-BYieldingRegisterSteamController calls 0x1070620 **once**. If it returns 0:
+BYieldingRegisterSteamController calls 0x1070620 [32-bit: NEEDS RE-ANALYSIS] **once**. If it returns 0:
 1. Logs: "BYieldingCompleteSteamControllerRegistration - couldn't get controller identity."
 2. Releases resources
 3. Returns 0 (failure)
@@ -773,14 +776,14 @@ BYieldingRegisterSteamController calls 0x1070620 **once**. If it returns 0:
 
 ### Error Path Timeline
 ```
-0x10b3bac: call 0x1070620        ; GetControllerInfo
-0x10b3bb1: test al, al           ; check return
-0x10b3bb3: je 0x10b3ee8         ; → failure path
-0x10b3ee8: ... (setup logging)
-0x10b3f4b: lea "couldn't get controller identity"
-0x10b3f74: call logMsg()
-0x10b3f79: jmp 0x10b3e6f        ; → cleanup
-0x10b3e6f: xor r12d, r12d       ; return 0
+0x10b3bac [32-bit: NEEDS RE-ANALYSIS]: call 0x1070620 [32-bit: NEEDS RE-ANALYSIS]        ; GetControllerInfo
+0x10b3bb1 [32-bit: NEEDS RE-ANALYSIS]: test al, al           ; check return
+0x10b3bb3 [32-bit: NEEDS RE-ANALYSIS]: je 0x10b3ee8 [32-bit: NEEDS RE-ANALYSIS]         ; → failure path
+0x10b3ee8 [32-bit: NEEDS RE-ANALYSIS]: ... (setup logging)
+0x10b3f4b [32-bit: NEEDS RE-ANALYSIS]: lea "couldn't get controller identity"
+0x10b3f74 [32-bit: NEEDS RE-ANALYSIS]: call logMsg()
+0x10b3f79 [32-bit: NEEDS RE-ANALYSIS]: jmp 0x10b3e6f [32-bit: NEEDS RE-ANALYSIS]        ; → cleanup
+0x10b3e6f [32-bit: NEEDS RE-ANALYSIS]: xor r12d, r12d       ; return 0
 ```
 
 ---
@@ -796,8 +799,8 @@ Slot iterator: for slot 0..15:
   2. Check flag byte [obj+0x1091fd]
   3. Load connection [obj+0x190]
   4. Call vtable[0x28] for slot state
-  5. If slot state == 3 → call 0x1070620
-  6. If 0x1070620 returns 0 → "Disconnecting zombie controller %d"
+  5. If slot state == 3 → call 0x1070620 [32-bit: NEEDS RE-ANALYSIS]
+  6. If 0x1070620 [32-bit: NEEDS RE-ANALYSIS] returns 0 → "Disconnecting zombie controller %d"
   7. Call 0x106d8a0 to disconnect
 ```
 
@@ -806,7 +809,7 @@ Slot iterator: for slot 0..15:
 2. Steam opened /dev/hidrawN
 3. Feature report handshake **did not complete** within ~6 seconds
 4. Slot ready flag at offset 0x200 is still 0
-5. Zombie timer fires → 0x1070620 returns 0 → disconnect
+5. Zombie timer fires → 0x1070620 [32-bit: NEEDS RE-ANALYSIS] returns 0 → disconnect
 
 ### The Race Condition
 ```
@@ -814,7 +817,7 @@ T+0s:    BLE connection established
 T+0s:    Steam opens /dev/hidrawN, starts reading
 T+0-2s:  Feature report handshake (0xf2, GET_ATTRIBUTES, serial)
 T+2s:    Slot data populated → ready flag set
-T+6s:    Zombie timer fires → 0x1070620 → must return 1
+T+6s:    Zombie timer fires → 0x1070620 [32-bit: NEEDS RE-ANALYSIS] → must return 1
 ```
 
 ---
@@ -871,7 +874,7 @@ The first byte of the unique_id field IS the ready flag. If our ATT server doesn
 | `functions/ipc_message_format.c` | **NEW** IPC protobuf message format |
 | `functions/zombie_disconnect.c` | **NEW** Zombie disconnect logic and conditions |
 | `functions/registration_requirements.c` | **NEW** Registration requirements and flow |
-| `functions/controller_identity_check.c` | **NEW** 0x1070620 analysis — same function for registration + zombie check |
+| `functions/controller_identity_check.c` | **NEW** 0x1070620 [32-bit: NEEDS RE-ANALYSIS] analysis — same function for registration + zombie check |
 | `functions/registration_identity_failure.c` | **NEW** What happens when identity check fails |
 | `functions/zombie_vs_identity.c` | **NEW** Zombie check vs identity check (SAME FUNCTION) |
 | `functions/registration_data_flow.c` | **NEW** What data registration needs from ATT server |
@@ -904,7 +907,7 @@ Previous analysis conflated two DIFFERENT data structures:
 - `controller + 0x1070 + id * 0x54` (ControllerDetails slot)
 - Sets `controller+0x3c = 1` (ControllerDetails ready_flag)
 
-**GetControllerInfo (0x1070620)** reads from:
+**GetControllerInfo (0x1070620** [32-bit: NEEDS RE-ANALYSIS]**)** reads from:
 - `controller + slot * 0xe8 + 0x200` (Identity slot unique_id)
 - Checks `cmp byte [rax+0x200], 0` (identity slot ready flag)
 
@@ -965,7 +968,7 @@ The identity slot at `controller+slot*0xe8+0x200` (unique_id/serial number) is p
 
 **Phase 2: Feature Report Response Processing**
 - The state machine at `0x10d4e6c` processes GET_ATTRIBUTES/GET_SERIAL/0xf2 responses
-- Responses are stored in the state machine object (r15+0xc0 settings array)
+- Responses are stored in the state machine object (esi+0xc0 settings array)
 - A separate function reads from the state machine and writes to the identity slot
 - The unique_id at slot+0x200 is written when the serial number response is processed
 
@@ -991,10 +994,10 @@ The write to slot+0x200 is NOT a single instruction. It happens through a chain:
 
 ### The Blocker
 
-The zombie check at `0x107088c` reads:
+The zombie check at `0x107088c` [32-bit: NEEDS RE-ANALYSIS] reads:
 ```
 cmp byte [rax+0x200], 0    ; rax = controller + slot*0xe8
-jne 0x10708a0               ; if non-zero → success
+jne 0x10708a0 [32-bit: NEEDS RE-ANALYSIS]               ; if non-zero → success
 ```
 
 For this check to pass, slot+0x200 must be non-zero. This happens ONLY when the feature report handshake completes and the serial number is written to the identity slot.
@@ -1041,7 +1044,7 @@ The real fix is to make BlueZ's hog-lib.c send ATT Read Requests for Feature Rep
 | `0x105c7f0` | InitializeSlotDefaults | Clears identity slot, sets defaults |
 | `0x105ca80` | CopyIdentityData | Requires slot+0x200 != 0, copies identity data |
 | `0x105cb50` | MainControllerSetup | Large function, reads/writes identity slot |
-| `0x1070620` | GetControllerInfo | Zombie check, reads slot+0x200 |
+| `0x1070620` [32-bit: NEEDS RE-ANALYSIS] | GetControllerInfo | Zombie check, reads slot+0x200 |
 | `0x10d4e6c` | FeatureReportStateMachine | Processes FR 0x00 responses |
 | `0x1092820` | QueueFetchingControllerDetails | Writes ControllerDetails (NOT identity slot) |
 
@@ -1051,7 +1054,7 @@ The real fix is to make BlueZ's hog-lib.c send ATT Read Requests for Feature Rep
 
 ### Status: **DETERMINED**
 
-### The Function at 0x10c1f5f
+### The Function at 0x10c1f5f [32-bit: NEEDS RE-ANALYSIS]
 
 This is the INITIAL controller setup function. For SC2 BLE (PID 0x1303), it handles the complete feature report handshake. The function:
 
@@ -1082,7 +1085,7 @@ Byte 1-4: Value (uint32 little-endian)
 Jump table at `0x00aa3f98` dispatches based on tag. Only tag 1 confirmed:
 - **Tag 1**: Writes VID:PID to output struct. VID hardcoded to 0x28de, PID from value low word.
 
-Validation at `0x10c2c48-0x10c2c6a`:
+Validation at `0x10c2c48` [32-bit: NEEDS RE-ANALYSIS]`-0x10c2c6a` [32-bit: NEEDS RE-ANALYSIS]:
 - byte[1] must be non-zero
 - count/5 gives number of attribute groups
 - byte[1] <= 4 → simple path, byte[1] > 4 → multi-group path
@@ -1178,7 +1181,7 @@ Feature report WRITE commands (SET_REPORT) arrive ~150 seconds after connection.
 
 | File | Content |
 |------|---------|
-| `functions/controller_identity_check.c` | **NEW** 0x1070620 disassembly (7-check gate) |
+| `functions/controller_identity_check.c` | **NEW** 0x1070620 [32-bit: NEEDS RE-ANALYSIS] disassembly (7-check gate) |
 | `functions/registration_data_flow.c` | **NEW** What data registration needs |
 | `functions/zombie_disconnect.c` | **NEW** Zombie check conditions |
 | `functions/serial_validation.c` | **NEW** V_strncmp validation analysis |
@@ -1195,14 +1198,14 @@ Feature report WRITE commands (SET_REPORT) arrive ~150 seconds after connection.
 
 **Status: UNVERIFIED — Likely graphics API type, not controller state**
 
-The function at `0x01559070` writes `[object+0x1d8]` = graphics API type:
-- `0x015647f5`: edx=1 (GL)
-- `0x01564857`: edx=1 (GL D3D variant)
-- `0x015648bc`: edx=2 (Vulkan)
-- `0x0156323f`: edx=3 (D3D12 path A)
-- `0x015632e1`: edx=4 (D3D12 path B)
+The function at `0x01559070` [32-bit: NEEDS RE-ANALYSIS] writes `[object+0x1d8]` = graphics API type:
+- `0x015647f5` [32-bit: NEEDS RE-ANALYSIS]: edx=1 (GL)
+- `0x01564857` [32-bit: NEEDS RE-ANALYSIS]: edx=1 (GL D3D variant)
+- `0x015648bc` [32-bit: NEEDS RE-ANALYSIS]: edx=2 (Vulkan)
+- `0x0156323f` [32-bit: NEEDS RE-ANALYSIS]: edx=3 (D3D12 path A)
+- `0x015632e1` [32-bit: NEEDS RE-ANALYSIS]: edx=4 (D3D12 path B)
 
-**However**: We are NOT certain these are the same object type as what the dispatcher at `0x015675a8` reads. Offset 0x1d8 is used in hundreds of places for different purposes (pointers, counters, state enums, shader API types). The connection between the shader compilation path and the YieldingRunTestProgram path is unverified.
+**However**: We are NOT certain these are the same object type as what the dispatcher at `0x015675a8` [32-bit: NEEDS RE-ANALYSIS] reads. Offset 0x1d8 is used in hundreds of places for different purposes (pointers, counters, state enums, shader API types). The connection between the shader compilation path and the YieldingRunTestProgram path is unverified.
 
 ### Finding: Handler +0x08 BLE Flag is NEVER READ
 
@@ -1220,26 +1223,26 @@ Exhaustive search found that values 3 and 4 are NEVER written as immediate value
 
 **Status: CONFIRMED**
 
-The controller constructor at `0x01558bb0` reads `[parent+0x1b0]` and stores it at `[controller+0x1d8]`. The parent's field at 0x1B0 is set to `0x02accf60` (a sub-vtable pointer) at `0x00f907c5` or `0x00f912bb`.
+The controller constructor at `0x01558bb0` [32-bit: NEEDS RE-ANALYSIS] reads `[parent+0x1b0]` and stores it at `[controller+0x1d8]`. The parent's field at 0x1B0 is set to `0x02accf60` [32-bit: NEEDS RE-ANALYSIS] (a sub-vtable pointer) at `0x00f907c5` [32-bit: NEEDS RE-ANALYSIS] or `0x00f912bb` [32-bit: NEEDS RE-ANALYSIS].
 
-**However**: The pointer at 0x1d8 gets overwritten with a small integer (1-4) later. The destructor at `0x01551560` reads [0x1d8] as a QWORD pointer, suggesting the pointer and integer coexist — the overwrite happens after construction but before the dispatcher runs.
+**However**: The pointer at 0x1d8 gets overwritten with a small integer (1-4) later. The destructor at `0x01551560` [32-bit: NEEDS RE-ANALYSIS] reads [0x1d8] as a QWORD pointer, suggesting the pointer and integer coexist — the overwrite happens after construction but before the dispatcher runs.
 
-### Finding: All 8 Callers of 0x156d6a0 Found
+### Finding: All 8 Callers of 0x156d6a0 [32-bit: NEEDS RE-ANALYSIS] Found
 
 **Status: CONFIRMED**
 
 | # | Address | Function | After-call write | Timeout |
 |---|---------|----------|-----------------|---------|
-| 1 | `0x1567817` | YieldingRunTestProgram | [obj+0x208] = 1 | 60s |
+| 1 | `0x1567817` | YieldingRunTestProgram | [obj+0x17c] = 1 | 60s |
 | 2 | `0x1567a7a` | YieldingRunTestProgram variant | NONE | 60s |
-| 3 | `0x15e22fe` | YieldingCheckForUpdateBIOS | [obj+0x1b0] = 1 | 120s |
-| 4 | `0x15e28ae` | YieldingCheckForUpdateOS | [obj+0x1b0] = 1 | 300s |
-| 5 | `0x15e2e8e` | BYieldingRunAPIJob A | NONE | 5s |
-| 6 | `0x15e30d6` | BYieldingRunAPIJob B | [obj+0x1b0] = 1 | 5s |
-| 7 | `0x15e354c` | BYieldingRunAPIJob C | [obj+0x1b0] = 1 | 5s |
-| 8 | `0x15e7934` | YieldingApplyUpdateBIOS | NONE | infinite |
+| 3 | `0x15e22fe` [32-bit: NEEDS RE-ANALYSIS] | YieldingCheckForUpdateBIOS | [obj+0x1b0] = 1 | 120s |
+| 4 | `0x15e28ae` [32-bit: NEEDS RE-ANALYSIS] | YieldingCheckForUpdateOS | [obj+0x1b0] = 1 | 300s |
+| 5 | `0x15e2e8e` [32-bit: NEEDS RE-ANALYSIS] | BYieldingRunAPIJob A | NONE | 5s |
+| 6 | `0x15e30d6` [32-bit: NEEDS RE-ANALYSIS] | BYieldingRunAPIJob B | [obj+0x1b0] = 1 | 5s |
+| 7 | `0x15e354c` [32-bit: NEEDS RE-ANALYSIS] | BYieldingRunAPIJob C | [obj+0x1b0] = 1 | 5s |
+| 8 | `0x15e7934` [32-bit: NEEDS RE-ANALYSIS] | YieldingApplyUpdateBIOS | NONE | infinite |
 
-Only Caller 1 sets [0x208] = 1. Callers 3,4,6,7 set [0x1b0] = 1 (update management flag).
+Only Caller 1 sets [0x17c] = 1. Callers 3,4,6,7 set [0x1b0] = 1 (update management flag).
 
 ### Finding: Connection Type Bitfield (0x180) is Separate from 0x1d8
 
@@ -1247,11 +1250,11 @@ Only Caller 1 sets [0x208] = 1. Callers 3,4,6,7 set [0x1b0] = 1 (update manageme
 
 Offset 0x180 is a skip mask for controller mode initialization — it controls which controller entries are active during mode setup. It does NOT control the 0x1d8 value. 0x180 and 0x1d8 are orthogonal.
 
-### Finding: Vtable Containing 0x015675a8 is Runtime-Constructed
+### Finding: Vtable Containing 0x015675a8 [32-bit: NEEDS RE-ANALYSIS] is Runtime-Constructed
 
 **Status: CONFIRMED**
 
-No static vtable entry in the binary contains `0x015675a8`. The vtable is built at runtime. This confirms the LD_PRELOAD patch approach (patching the `je` at `0x10d4da6`) is the right strategy.
+No static vtable entry in the binary contains `0x015675a8` [32-bit: NEEDS RE-ANALYSIS]. The vtable is built at runtime. This confirms the LD_PRELOAD patch approach (patching the `je` at `0x0123e601`) is the right strategy.
 
 ### Finding: All ~198 Write Sites to Offset 0x1d8 Found
 
@@ -1269,12 +1272,13 @@ The investigation revealed that hours of static analysis produced contradictory 
 
 ### Recommended Next Step
 
-**GDB watchpoint on [rdi+0x1d8]**: Set a GDB watchpoint on the memory location `[rdi+0x1d8]` during BLE connection init. Observe what value is actually read by the dispatcher at `0x015675a8`. This resolves whether 0x1d8 is a controller state, graphics API type, or something else entirely. Takes 5 minutes vs hours of static analysis.
+**GDB watchpoint on [rdi+0x1d8]**: Set a GDB watchpoint on the memory location `[rdi+0x1d8]` during BLE connection init. Observe what value is actually read by the dispatcher at `0x015675a8` [32-bit: NEEDS RE-ANALYSIS]. This resolves whether 0x1d8 is a controller state, graphics API type, or something else entirely. Takes 5 minutes vs hours of static analysis.
 
 ---
 
-*Analysis date: 2026-06-25 (updated 2026-06-29, sessions 1-9)*
-*Binary analyzed: `~/.steam/debian-installation/linux64/steamclient.so` (46,488,096 bytes)*
+*Analysis date: 2026-06-25 (updated 2026-06-30, sessions 1-9)*
+*Binary analyzed: `~/.steam/debian-installation/ubuntu12_32/steamclient.so` (49MB, 32-bit i386)*
+*Original analysis: `~/.steam/debian-installation/linux64/steamclient.so` (46MB, 64-bit x86_64) — addresses converted to 32-bit where verified*
 *SDL3 source: `src/joystick/hidapi/SDL_hidapi_steam_triton.c` (GitHub)*
 *BlueZ binary: `/usr/libexec/bluetooth/bluetoothd`*
 *Tools used: radare2, objdump, Python scripts, SDL3 source code*
@@ -1283,9 +1287,9 @@ The investigation revealed that hours of static analysis produced contradictory 
 
 ## SESSION 7 (2026-06-28) — Haptics Root Cause Analysis
 
-### Finding: `0x17252a0` is DEAD CODE
+### Finding: `0x17252a0` [32-bit: NEEDS RE-ANALYSIS] is DEAD CODE
 
-The haptic trigger function at `0x17252a0` has **ZERO callers** in the entire 46MB binary. Searched via:
+The haptic trigger function at `0x17252a0` [32-bit: NEEDS RE-ANALYSIS] has **ZERO callers** in the entire 46MB binary. Searched via:
 - E8 call-rel32 scan (Python)
 - 64-bit pointer search
 - 32-bit value search
@@ -1302,7 +1306,7 @@ All returned zero matches. The function exists but is never invoked. Checks insi
 
 ### Finding: SDL.joystick.cap.rumble is NOT the Blocker
 
-The string `SDL.joystick.cap.rumble` at `0x00d0d093` IS referenced in code at `0x0176a25d`. The code queries it via `[0x02c6a868]` (likely `SDL_GetHintBoolean`) and gates bit 14 (0x4000) in the capability bitmask. However, Steam IS scheduling haptics (`CPulseHapticWorkItem` appears in Steam logs), so this capability check is NOT the blocker.
+The string `SDL.joystick.cap.rumble` at `0x00d0d093` IS referenced in code at `0x0176a25d` [32-bit: NEEDS RE-ANALYSIS]. The code queries it via `[0x02c6a868]` [32-bit: NEEDS RE-ANALYSIS] (likely `SDL_GetHintBoolean`) and gates bit 14 (0x4000) in the capability bitmask. However, Steam IS scheduling haptics (`CPulseHapticWorkItem` appears in Steam logs), so this capability check is NOT the blocker.
 
 ### Finding: Primary Blocker is hog-ll SET_REPORT Failure
 
@@ -1320,7 +1324,7 @@ Report Map declares output report 0x80, CHR_REPORT exists at handle 0x0019 with 
 
 | File | Content |
 |------|---------|
-| `functions/haptic_dead_code_analysis.c` | **NEW** Analysis of 0x17252a0 and its lack of callers |
+| `functions/haptic_dead_code_analysis.c` | **NEW** Analysis of 0x17252a0 [32-bit: NEEDS RE-ANALYSIS] and its lack of callers |
 | `functions/sdl_rumble_capability.c` | **NEW** SDL.joystick.cap.rumble analysis |
 | `functions/set_report_failure.c` | **NEW** hog-ll SET_REPORT failure analysis |
 
@@ -1410,131 +1414,131 @@ Write data differs between native and BLE (different serial hashes). Our handler
 
 #### What YieldingRunTestProgram Is
 
-`YieldingRunTestProgram` is a **job name** in Steam's internal job/task system (defined in `/data/src/common/job.cpp`). It is NOT a standalone function. The string `"YieldingRunTestProgram"` at `0x00d6d17b` is the job's debug identifier.
+`YieldingRunTestProgram` is a **job name** in Steam's internal job/task system (defined in `/data/src/common/job.cpp`). It is NOT a standalone function. The string `"YieldingRunTestProgram"` at `0x00bfc7e3` is the job's debug identifier.
 
 The name breaks down as:
 - **Yielding** — Steam's job system uses `BYielding*` naming for jobs that block/wait (e.g., `BYieldingRunAPIJob`, `BYieldingCompleteSteamControllerRegistration`). "Yielding" means the job suspends and waits for completion.
 - **Run** — Executes something
 - **Test Program** — Runs a test program on the controller hardware. Error strings confirm this:
-  - `"Error: %s: failed to wait for process: %s"` (at `0xd72898`)
+  - `"Error: %s: failed to wait for process: %s"` (at `0xd72898` [32-bit: NOT FOUND])
   - `"Error: %s: process timed out: %s"` (at `0xc9b7d8`)
 
 #### Where It Lives
 
 | Address | What | Details |
 |---------|------|---------|
-| `0x015675a8` | Function entry | 18,300-byte controller message dispatcher (52 basic blocks). NOT named YieldingRunTestProgram itself |
-| `0x015677f4` | Job allocation point | `mov edi, 0x210` — allocates the 0x210-byte job context |
-| `0x0156781c` | The gate flag | `mov byte [r15+0x208], 1` — THE instruction that enables 0x8F haptic dispatch |
-| `0x01567847` | Job name reference | `lea rsi, "YieldingRunTestProgram"` — registers this name with the job system |
-| `0x00d6d17b` | String | `"YieldingRunTestProgram"` — the actual string in the binary |
+| `0x015675a8` [32-bit: NEEDS RE-ANALYSIS] | Function entry | 18,300-byte controller message dispatcher (52 basic blocks). NOT named YieldingRunTestProgram itself |
+| `0x015677f4` [32-bit: NEEDS RE-ANALYSIS] | Job allocation point | `mov edi, 0x210` — allocates the 0x210-byte job context |
+| `0x0178a140` | The gate flag | `mov byte [esi+0x17c], 1` — THE instruction that enables 0x8F haptic dispatch |
+| `0x01567847` [32-bit: NEEDS RE-ANALYSIS] | Job name reference | `lea rsi, "YieldingRunTestProgram"` — registers this name with the job system |
+| `0x00bfc7e3` | String | `"YieldingRunTestProgram"` — the actual string in the binary |
 | `0x27a2370` | Job system registration | In `job.cpp` — validates job name, checks "this == g_pJobCur" |
 | `0x2a6ca70` | operator new(0x210) | Allocates the 0x210-byte job context object |
 
 #### Full Disassembly Walkthrough
 
 ```
-; === FUNCTION ENTRY (0x015675a8) ===
-0x015675a8:  push rbp
-0x015675a9:  mov rbp, rdi                      ; rbp = controller object
-0x015675ad:  sub rsp, 0x138                     ; 312-byte stack frame
+; === FUNCTION ENTRY (0x015675a8 [32-bit: NEEDS RE-ANALYSIS]) ===
+0x015675a8 [32-bit: NEEDS RE-ANALYSIS]:  push rbp
+0x015675a9 [32-bit: NEEDS RE-ANALYSIS]:  mov rbp, rdi                      ; rbp = controller object
+0x015675ad [32-bit: NEEDS RE-ANALYSIS]:  sub rsp, 0x138                     ; 312-byte stack frame
 
 ; === CONTROLLER STATE CHECK (the branch point) ===
-0x015675c7:  mov eax, dword [rdi + 0x1d8]      ; Load controller state/type
-0x015675cd:  lea edx, [rax - 1]
-0x015675d0:  cmp edx, 1
-0x015675d3:  jbe 0x1567610                      ; IF state==1 or state==2 → MAIN PATH
+0x015675c7 [32-bit: NEEDS RE-ANALYSIS]:  mov eax, dword [rdi + 0x1d8]      ; Load controller state/type
+0x015675cd [32-bit: NEEDS RE-ANALYSIS]:  lea edx, [rax - 1]
+0x015675d0 [32-bit: NEEDS RE-ANALYSIS]:  cmp edx, 1
+0x015675d3 [32-bit: NEEDS RE-ANALYSIS]:  jbe 0x1567610                      ; IF state==1 or state==2 → MAIN PATH
 
-0x015675d5:  sub eax, 3
-0x015675d8:  cmp eax, 1
-0x015675db:  jbe 0x1567910                      ; IF state==3 or state==4 → ALTERNATIVE PATH
+0x015675d5 [32-bit: NEEDS RE-ANALYSIS]:  sub eax, 3
+0x015675d8 [32-bit: NEEDS RE-ANALYSIS]:  cmp eax, 1
+0x015675db [32-bit: NEEDS RE-ANALYSIS]:  jbe 0x1567910                      ; IF state==3 or state==4 → ALTERNATIVE PATH
 
-0x015675e1:  ... (early return for other states: stack canary check, pop regs, ret)
+0x015675e1 [32-bit: NEEDS RE-ANALYSIS]:  ... (early return for other states: stack canary check, pop regs, ret)
 
 ; === MAIN PATH (state 1-2) — where YieldingRunTestProgram runs ===
-0x01567610:  ... (large setup: ~0x1E0 bytes of stack frame initialization)
-0x0156761d:  mov qword [rsp + 0x40], 0          ; Zero out locals
-0x01567626:  movdqa xmm0, xmmword [0x00c82a40] ; Load constant
+0x01567610 [32-bit: NEEDS RE-ANALYSIS]:  ... (large setup: ~0x1E0 bytes of stack frame initialization)
+0x0156761d [32-bit: NEEDS RE-ANALYSIS]:  mov qword [rsp + 0x40], 0          ; Zero out locals
+0x01567626:  movdqa xmm0, xmmword [0x00c82a40] [32-bit: NEEDS RE-ANALYSIS] ; Load constant
 ... (continues with more initialization) ...
 
 ; === PREREQUISITE CHECK ===
-0x015677e3:  cmp byte [rsp + 0x127], 0          ; Check prerequisite flag
-0x015677ee:  js 0x15678f0                       ; If not set, jump to fallback
+0x015677e3 [32-bit: NEEDS RE-ANALYSIS]:  cmp byte [rsp + 0x127], 0          ; Check prerequisite flag
+0x015677ee [32-bit: NEEDS RE-ANALYSIS]:  js 0x15678f0                       ; If not set, jump to fallback
 
 ; === JOB ALLOCATION ===
-0x015677f4:  mov edi, 0x210                      ; Allocate 0x210-byte object
-0x015677f9:  call 0x2a6ca70                      ; operator new(0x210)
-0x015677fe:  xor r9d, r9d                        ; arg7 = 0
-0x01567801:  mov r8d, 1                          ; arg6 = 1
-0x01567807:  mov ecx, 0xea60                     ; arg4 = 60000 (timeout ms)
-0x0156780c:  mov rdx, rbx                        ; arg3 = context
-0x0156780f:  xor esi, esi                        ; arg2 = 0
-0x01567811:  mov rdi, rax                        ; arg1 = new object
-0x01567814:  mov r15, rax                        ; save pointer in r15
+0x015677f4 [32-bit: NEEDS RE-ANALYSIS]:  mov edi, 0x210                      ; Allocate 0x210-byte object
+0x015677f9 [32-bit: NEEDS RE-ANALYSIS]:  call 0x2a6ca70                      ; operator new(0x210)
+0x015677fe [32-bit: NEEDS RE-ANALYSIS]:  xor r9d, r9d                        ; arg7 = 0
+0x01567801 [32-bit: NEEDS RE-ANALYSIS]:  mov r8d, 1                          ; arg6 = 1
+0x01567807 [32-bit: NEEDS RE-ANALYSIS]:  mov ecx, 0xea60                     ; arg4 = 60000 (timeout ms)
+0x0156780c [32-bit: NEEDS RE-ANALYSIS]:  mov rdx, rbx                        ; arg3 = context
+0x0156780f [32-bit: NEEDS RE-ANALYSIS]:  xor esi, esi                        ; arg2 = 0
+0x01567811 [32-bit: NEEDS RE-ANALYSIS]:  mov rdi, rax                        ; arg1 = new object
+0x01567814:  mov esi, eax                        ; save pointer in esi
 
 ; === JOB CONTEXT INITIALIZATION ===
-0x01567817:  call 0x156d6a0                      ; Initialize job context
-;   Inside 0x156d6a0:
+0x01567817:  call 0x156d6a0 [32-bit: NEEDS RE-ANALYSIS]                      ; Initialize job context
+;   Inside 0x156d6a0 [32-bit: NEEDS RE-ANALYSIS]:
 ;     0x156d702: mov dword [rbx + 8], 1          ; state = 1
-;     0x156d8a1: mov byte [rbx + 0x208], 0       ; *** CLEARS 0x8F gate to 0 ***
+;     0x156d8a1 [32-bit: NEEDS RE-ANALYSIS]: mov byte [rbx + 0x17c], 0       ; *** CLEARS 0x8F gate to 0 ***
 ;     (sets up vtable at 0x02ac0eb8, mutex, etc.)
 
 ; === THE CRITICAL INSTRUCTION ===
-0x0156781c:  mov byte [r15 + 0x208], 1          ; *** SET 0x8F GATE FLAG TO 1 ***
+0x0178a140:  mov byte [esi + 0x17c], 1          ; *** SET 0x8F GATE FLAG TO 1 ***
 
 ; === FURTHER INITIALIZATION ===
-0x0156782a:  call 0x2844a00                      ; Start retry timer / further init
+0x0156782a [32-bit: NEEDS RE-ANALYSIS]:  call 0x2844a00                      ; Start retry timer / further init
 
 ; === REGISTER WITH JOB SYSTEM ===
-0x01567847:  lea rsi, str.YieldingRunTestProgram ; "YieldingRunTestProgram"
-0x0156784e:  call 0x27a2370                      ; Job system registration
+0x01567847 [32-bit: NEEDS RE-ANALYSIS]:  lea rsi, str.YieldingRunTestProgram ; "YieldingRunTestProgram"
+0x0156784e [32-bit: NEEDS RE-ANALYSIS]:  call 0x27a2370                      ; Job system registration
 ;   Inside job.cpp:
 ;     Validates "this == g_pJobCur"
 ;     Sets [rbp + 0x38] = 1
 ;     Stores name pointer at [rbp + 0x170]
 
 ; === PROCESS WAIT RESULT CHECK ===
-0x01567853:  test al, al                         ; Did job name check pass?
-0x01567855:  jne 0x15678b0                       ; If yes, check process result
+0x01567853 [32-bit: NEEDS RE-ANALYSIS]:  test al, al                         ; Did job name check pass?
+0x01567855 [32-bit: NEEDS RE-ANALYSIS]:  jne 0x15678b0                       ; If yes, check process result
 
 ; === ERROR HANDLING (if job failed) ===
-0x01567871:  lea rsi, "Error: %s: failed to wait for process: %s"
-0x0156787f:  call 0x1790ba0                       ; Log error
+0x01567871 [32-bit: NEEDS RE-ANALYSIS]:  lea rsi, "Error: %s: failed to wait for process: %s"
+0x0156787f [32-bit: NEEDS RE-ANALYSIS]:  call 0x1790ba0                       ; Log error
 
 ; === TIMEOUT HANDLING ===
-0x015678d8:  lea rsi, "Error: %s: process timed out: %s"
-0x015678e6:  call 0x1790ba0                       ; Log error
+0x015678d8 [32-bit: NEEDS RE-ANALYSIS]:  lea rsi, "Error: %s: process timed out: %s"
+0x015678e6 [32-bit: NEEDS RE-ANALYSIS]:  call 0x1790ba0                       ; Log error
 
 ; === FALLBACK PATH (if prerequisite not met) ===
-0x015678f0:  mov rbx, qword [rsp + 0x110]
-0x015678fb:  jne 0x15677f4                       ; Loop back to job allocation
-0x01567901:  lea rbx, [0x00d6fa88]               ; Load fallback string
-0x01567908:  jmp 0x15677f4                       ; Retry
+0x015678f0 [32-bit: NEEDS RE-ANALYSIS]:  mov rbx, qword [rsp + 0x110]
+0x015678fb [32-bit: NEEDS RE-ANALYSIS]:  jne 0x15677f4                       ; Loop back to job allocation
+0x01567901:  lea rbx, [0x00d6fa88] [32-bit: NEEDS RE-ANALYSIS]               ; Load fallback string
+0x01567908 [32-bit: NEEDS RE-ANALYSIS]:  jmp 0x15677f4                       ; Retry
 ```
 
 #### The Alternative Path (state 3-4)
 
-At `0x01567910`:
+At `0x01567910` [32-bit: NEEDS RE-ANALYSIS]:
 ```
-0x01567910:  mov edi, 0x10                        ; Allocate only 16 bytes (NOT 0x210!)
-0x01567915:  call 0x2a6ca70                       ; operator new(0x10)
-0x01567921:  mov r15, rax                         ; Save pointer
-0x01567944:  movups xmmword [r15], xmm0          ; Initialize 16-byte object
+0x01567910 [32-bit: NEEDS RE-ANALYSIS]:  mov edi, 0x10                        ; Allocate only 16 bytes (NOT 0x210!)
+0x01567915 [32-bit: NEEDS RE-ANALYSIS]:  call 0x2a6ca70                       ; operator new(0x10)
+0x01567921:  mov esi, eax                         ; Save pointer
+0x01567944:  movups xmmword [esi], xmm0          ; Initialize 16-byte object
 ```
 
-This allocates a tiny 16-byte object instead of the 0x210-byte job context. It does NOT set `[r15+0x208] = 1`. This is the "wrong" path that BLE devices take.
+This allocates a tiny 16-byte object instead of the 0x210-byte job context. It does NOT set `[esi+0x17c] = 1`. This is the "wrong" path that BLE devices take.
 
 #### The Gate Mechanism
 
 ```
-; At 0x010d4da0 — the gate check (called for every 0x8F command):
-0x010d4da0:  cmp byte [r15 + 0x208], 0          ; Is haptic gate open?
-0x010d4da8:  movzx eax, byte [r15 + 0xe1]       ; Load another field
-0x010d4db0:  je 0x10d4fd0                        ; If gate==0 → SKIP entire vtable dispatch
-                                                 ; If gate==1 → proceed to vtable[0x10] dispatch
+; At 0x0123e5fb — the gate check (called for every 0x8F command):
+0x0123e5fb:  cmp byte [esi + 0x17c], 0          ; Is haptic gate open?
+0x0123e601:  movzx eax, byte [esi + 0xe1]       ; Load another field
+0x0123e607:  je 0x10d4ff0                        ; If gate==0 → SKIP entire vtable dispatch
+                                                  ; If gate==1 → proceed to vtable[0x10] dispatch
 
 ; The vtable dispatch (only reached if gate is open):
-0x010d4dfc:  mov rax, [r15+0xa8]                 ; load HID device array
+0x010d4dfc:  mov rax, [esi+0xa8]                 ; load HID device array
 0x010d4e08:  mov rax, [rax+rdx*8]                ; index into array
 0x010d4e0e:  mov rdi, [rax]                      ; load object pointer
 0x010d4e11:  mov rax, [rdi]                      ; load vtable
@@ -1545,15 +1549,15 @@ This allocates a tiny 16-byte object instead of the 0x210-byte job context. It d
 
 | Action | Address | Value | When |
 |--------|---------|-------|------|
-| **Cleared** | `0x156d8a1` | `[obj+0x208] = 0` | During job context init (called from 0x156d6a0) |
-| **Set to 1** | `0x156781c` | `[obj+0x208] = 1` | After YieldingRunTestProgram allocates context and calls init |
-| **Cleared** | `0x119f3b1` | `[obj+0x208] = 0` | During cleanup (calls vtable[0x228]) |
-| **Checked** | `0x10d4da0` | `cmp [r15+0x208], 0` | When 0x8F haptic is about to be dispatched |
+| **Cleared** | `0x0156d8a1` | `[obj+0x17c] = 0` | During job context init (called from 0x156d6a0 [32-bit: NEEDS RE-ANALYSIS]) |
+| **Set to 1** | `0x0178a140` | `[obj+0x17c] = 1` | After YieldingRunTestProgram allocates context and calls init |
+| **Cleared** | `0x0119f3b1` [32-bit: NEEDS RE-ANALYSIS] | `[obj+0x17c] = 0` | During cleanup (calls vtable[0x228]) |
+| **Checked** | `0x0123e5fb` | `cmp [esi+0x17c], 0` | When 0x8F haptic is about to be dispatched |
 
 #### Why It Doesn't Run on BLE
 
-The dispatcher at `0x015675a8` reads `[rdi+0x1d8]` (controller state/type):
-- **State 1 or 2** → takes the 0x210-byte job allocation path → YieldingRunTestProgram runs → `[r15+0x208] = 1` → 0x8F is dispatched
+The dispatcher at `0x015675a8` [32-bit: NEEDS RE-ANALYSIS] reads `[rdi+0x1d8]` (controller state/type):
+- **State 1 or 2** → takes the 0x210-byte job allocation path → YieldingRunTestProgram runs → `[esi+0x17c] = 1` → 0x8F is dispatched
 - **State 3 or 4** → takes the 16-byte allocation path → NO job, NO flag set → 0x8F is NEVER dispatched
 - **Other states** → returns immediately
 
@@ -1570,7 +1574,7 @@ This is at offset `0x1d8` in the controller object. Given the context:
 This is likely a **controller protocol version** or **connection maturity state**, not just a transport type. The native Deck's Neptune controller (PID 0x1205) gets state 1-2 because it goes through a full initialization sequence. Our BLE spoof (PID 0x1303) gets state 3-4 because something in the initialization is different.
 
 **IMPORTANT UPDATE (2026-06-29 evening)**: This interpretation is **UNVERIFIED**. Recent investigation found:
-- The function at `0x01559070` writes `[object+0x1d8]` = graphics API type (1=GL, 2=Vulkan, 3=D3D12 path A, 4=D3D12 path B)
+- The function at `0x01559070` [32-bit: NEEDS RE-ANALYSIS] writes `[object+0x1d8]` = graphics API type (1=GL, 2=Vulkan, 3=D3D12 path A, 4=D3D12 path B)
 - Values 3 and 4 are NEVER written as immediate values to 0x1d8 — only 0, 1, 2, 0xFFFFFFFF, and 0x80000000
 - The BLE handler at `0x010c4e0c` sets `[r12+0x08] = 1` (BLE flag) but this is NEVER READ anywhere
 - The controller constructor reads `[parent+0x1B0]` into `[controller+0x1d8]`, but it gets overwritten later
@@ -1583,30 +1587,30 @@ This is likely a **controller protocol version** or **connection maturity state*
 On native Deck:
 1. Controller registered → state set to 1-2
 2. YieldingRunTestProgram runs (spawns test process, waits)
-3. Test completes → `[r15+0x208] = 1`
+3. Test completes → `[esi+0x17c] = 1`
 4. Gate opens → 0x8F haptic commands are dispatched
 5. Steam haptics work (trackpad clicks, UI feedback)
 
 On BLE:
 1. Controller registered → state set to 3-4
 2. YieldingRunTestProgram never runs (wrong branch)
-3. `[r15+0x208]` stays 0
+3. `[esi+0x17c]` stays 0
 4. Gate stays closed → 0x8F never dispatched
 5. Steam haptics don't work
 
 #### Important Clarification: 0x15e2xxx Functions Are NOT Related
 
-The `[reg+0x1b0] = 1` flag found at `0x15e22fe`, `0x15e28ae`, `0x15e2e8e`, `0x15e30d6`, `0x15e354c`, `0x15e7934` are all SteamOS **update management** functions:
+The `[reg+0x1b0] = 1` flag found at `0x15e22fe` [32-bit: NEEDS RE-ANALYSIS], `0x15e28ae` [32-bit: NEEDS RE-ANALYSIS], `0x15e2e8e` [32-bit: NEEDS RE-ANALYSIS], `0x15e30d6` [32-bit: NEEDS RE-ANALYSIS], `0x15e354c` [32-bit: NEEDS RE-ANALYSIS], `0x15e7934` [32-bit: NEEDS RE-ANALYSIS] are all SteamOS **update management** functions:
 - `YieldingCheckForUpdateBIOS` — BIOS firmware update checker
 - `YieldingCheckForUpdateOS` — SteamOS update checker
 - `BYieldingRunAPIJob` — Steam API job runner
 - `YieldingApplyUpdateBIOS` — BIOS firmware update applier
 
-They call the same `0x156d6a0` allocator but set `[reg+0x1b0] = 1` (job context initialized flag). They have NOTHING to do with controllers or haptics. The `0x156d6a0` function is a **general-purpose job context allocator** used across many Steam subsystems.
+They call the same `0x156d6a0` [32-bit: NEEDS RE-ANALYSIS] allocator but set `[reg+0x1b0] = 1` (job context initialized flag). They have NOTHING to do with controllers or haptics. The `0x156d6a0` [32-bit: NEEDS RE-ANALYSIS] function is a **general-purpose job context allocator** used across many Steam subsystems.
 
 #### Confidence: Confirmed
 
-All addresses verified via radare2 targeted disassembly (no aaa). String at `0x00d6d17b` confirmed. Instruction at `0x0156781c` confirmed. Job system integration via `job.cpp` confirmed.
+All addresses verified via radare2 targeted disassembly (no aaa). String at `0x00bfc7e3` confirmed. Instruction at `0x0178a140` confirmed. Job system integration via `job.cpp` confirmed.
 
 ### Finding: Native Deck HID Capture Method
 

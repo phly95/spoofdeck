@@ -9,6 +9,8 @@ Handles ATT PDU exchange: MTU, service discovery, reads, writes, notifications.
 SMP pairing is handled separately by the kernel on CID 6.
 """
 
+import json
+import os
 import socket
 import struct
 import ctypes
@@ -17,6 +19,35 @@ import threading
 import time
 import select
 from collections import defaultdict
+
+# Structured protocol logging (enabled via SPOOFDECK_PROTO_LOG=1)
+_PROTO_LOG = os.environ.get('SPOOFDECK_PROTO_LOG', '') == '1'
+
+def _proto_log(event, **kwargs):
+    """Emit a structured JSON log line to stderr when SPOOFDECK_PROTO_LOG=1."""
+    if not _PROTO_LOG:
+        return
+    entry = {"ts": round(time.monotonic(), 3), "event": event}
+    entry.update(kwargs)
+    try:
+        print(json.dumps(entry), flush=True)
+    except Exception:
+        pass
+
+
+# SC2 command byte → human name (for structured logging)
+_SC2_CMD_NAMES = {
+    0x81: "CLEAR_DIGITAL_MAPPINGS",
+    0x83: "GET_ATTRIBUTES",
+    0x85: "SET_DEFAULT_DIGITAL_MAPPINGS",
+    0x87: "SET_SETTINGS_VALUES",
+    0x89: "GET_SETTINGS_VALUES",
+    0x8C: "GET_SETTINGS_DEFAULTS",
+    0x8D: "SET_CONTROLLER_MODE",
+    0xAE: "GET_SERIAL",
+    0xBA: "GET_CHIP_ID",
+    0xF2: "CAPABILITY_QUERY_UNKNOWN",
+}
 
 from gatt_db import (
     GattDatabase, Attribute,
@@ -30,7 +61,7 @@ from gatt_db import (
     ATT_OP_HANDLE_NFY, ATT_OP_HANDLE_IND, ATT_OP_HANDLE_CNF,
     ATT_OP_WRITE_CMD,
     ATT_ERR_INVALID_HANDLE, ATT_ERR_READ_NOT_PERM, ATT_ERR_WRITE_NOT_PERM,
-    ATT_ERR_ATTR_NOT_FOUND, ATT_ERR_REQ_NOT_SUPP,
+    ATT_ERR_ATTR_NOT_FOUND, ATT_ERR_REQ_NOT_SUPP, ATT_ERR_INVALID_OFFSET,
     GATT_PRIM_SVC_UUID, GATT_CHARAC_UUID, uuid16_to_bytes,
 )
 
@@ -231,6 +262,10 @@ class AttServer:
 
     def _handle_mtu_req(self, data):
         """Handle Exchange MTU Request (0x02)."""
+        if len(data) < 3:
+            _proto_log("att_mtu_req", error="INVALID_PDU_LEN", len=len(data))
+            self._send_error(ATT_OP_MTU_REQ, 0x0000, ATT_ERR_INVALID_PDU)
+            return
         client_mtu = struct.unpack('<H', data[1:3])[0]
         self.mtu = min(client_mtu, self.server_mtu)
         self.mtu = max(self.mtu, 23)  # Minimum MTU is 23
@@ -352,36 +387,69 @@ class AttServer:
         import time
         ts = time.strftime('%H:%M:%S')
         opcode = data[0]
+        if len(data) < 3:
+            _proto_log("att_read_req", opcode=f"0x{opcode:02x}", error="INVALID_PDU_LEN", len=len(data))
+            self._send_error(opcode, 0x0000, ATT_ERR_INVALID_PDU)
+            return
         handle = struct.unpack('<H', data[1:3])[0]
 
         print(f"[att] [{ts}] Read Request: handle=0x{handle:04x}")
         value = self.db.read_attribute(handle)
         if value is None:
             print(f"[att] [{ts}] Read FAILED: handle=0x{handle:04x} -> ERR_INVALID_HANDLE")
+            _proto_log("att_read_req", opcode=f"0x{opcode:02x}", handle=f"0x{handle:04x}",
+                       error="INVALID_HANDLE")
             self._send_error(opcode, handle, ATT_ERR_INVALID_HANDLE)
             return
 
+        # Cap response to MTU - 1 per ATT spec
+        capped = value[:self.mtu - 1] if len(value) > self.mtu - 1 else value
         print(f"[att] Read: handle=0x{handle:04x} len={len(value)} data={value.hex()}")
-        resp = struct.pack('B', ATT_OP_READ_RSP) + value
+        resp = struct.pack('B', ATT_OP_READ_RSP) + capped
         self._send(resp)
+
+        # Detect SC2 command echo in FR response
+        _cmd_byte = None
+        _cmd_name = None
+        if len(capped) >= 1:
+            _cmd_byte = capped[0]
+            _cmd_name = _SC2_CMD_NAMES.get(_cmd_byte)
+
+        _proto_log("att_read_req", opcode=f"0x{opcode:02x}", handle=f"0x{handle:04x}",
+                   response=capped[:64].hex(), response_len=len(capped),
+                   cmd=f"0x{_cmd_byte:02x}" if _cmd_byte is not None else None,
+                   cmd_name=_cmd_name)
 
     def _handle_read_blob(self, data):
         """Handle Read Blob Request (0x0C) — for values > MTU."""
         opcode = data[0]
+        if len(data) < 5:
+            _proto_log("att_read_blob", opcode=f"0x{opcode:02x}", error="INVALID_PDU_LEN", len=len(data))
+            self._send_error(opcode, 0x0000, ATT_ERR_INVALID_PDU)
+            return
         handle = struct.unpack('<H', data[1:3])[0]
         offset = struct.unpack('<H', data[3:5])[0]
 
         value = self.db.read_attribute(handle)
         if value is None:
+            _proto_log("att_read_blob", opcode=f"0x{opcode:02x}", handle=f"0x{handle:04x}",
+                       offset=offset, error="INVALID_HANDLE")
             self._send_error(opcode, handle, ATT_ERR_INVALID_HANDLE)
             return
 
         if offset >= len(value):
-            self._send_error(opcode, handle, ATT_ERR_INVALID_HANDLE)
+            _proto_log("att_read_blob", opcode=f"0x{opcode:02x}", handle=f"0x{handle:04x}",
+                       offset=offset, value_len=len(value), error="INVALID_OFFSET")
+            self._send_error(opcode, handle, ATT_ERR_INVALID_OFFSET)
             return
 
-        resp = struct.pack('B', ATT_OP_READ_BLOB_RSP) + value[offset:]
+        # Cap to MTU - 1 per ATT spec
+        chunk = value[offset:offset + self.mtu - 1]
+        resp = struct.pack('B', ATT_OP_READ_BLOB_RSP) + chunk
         self._send(resp)
+
+        _proto_log("att_read_blob", opcode=f"0x{opcode:02x}", handle=f"0x{handle:04x}",
+                   offset=offset, response_len=len(chunk))
 
     def _find_cccd_value_handle(self, cccd_handle):
         """Find the value handle of the characteristic that owns this CCCD.
@@ -399,12 +467,18 @@ class AttServer:
     def _handle_write(self, data):
         """Handle Write Request (0x12)."""
         opcode = data[0]
+        if len(data) < 3:
+            _proto_log("att_write_req", opcode=f"0x{opcode:02x}", error="INVALID_PDU_LEN", len=len(data))
+            self._send_error(opcode, 0x0000, ATT_ERR_INVALID_PDU)
+            return
         handle = struct.unpack('<H', data[1:3])[0]
         value = data[3:]
 
         attr = self.db.lookup(handle)
         if attr is None:
             print(f"[att] ❌ Write Request FAILED: handle=0x{handle:04x} ERR_INVALID_HANDLE (attr not found)")
+            _proto_log("att_write_req", opcode=f"0x{opcode:02x}", handle=f"0x{handle:04x}",
+                       data=value.hex(), error="INVALID_HANDLE")
             self._send_error(opcode, handle, ATT_ERR_INVALID_HANDLE)
             return
 
@@ -436,9 +510,30 @@ class AttServer:
             # Non-CCCD write — log prominently for feature reports
             print(f"[DIAG] 📝 WRITE to handle=0x{handle:04x} uuid={attr.uuid.hex()} data={value.hex()}")
 
-        self.db.write_attribute(handle, value)
+        # Detect SC2 command byte (value[1] when value[0] is Report ID)
+        _cmd_byte = None
+        _cmd_name = None
+        if len(value) >= 2:
+            _cmd_byte = value[1] if len(value) > 1 else value[0]
+            _cmd_name = _SC2_CMD_NAMES.get(_cmd_byte)
+
+        cb_invoked = False
+        cb_result = None
+        try:
+            self.db.write_attribute(handle, value)
+            cb_invoked = True
+        except Exception as exc:
+            cb_result = f"exception:{exc}"
+
         resp = struct.pack('B', ATT_OP_WRITE_RSP)
         self._send(resp)
+
+        _proto_log("att_write_req", opcode=f"0x{opcode:02x}", handle=f"0x{handle:04x}",
+                   data=value.hex(),
+                   cmd=f"0x{_cmd_byte:02x}" if _cmd_byte is not None else None,
+                   cmd_name=_cmd_name,
+                   response="13", response_len=1,
+                   cb_invoked=cb_invoked, cb_result=cb_result)
 
         if enable_handle is not None and self._on_cccd_enabled:
             self._on_cccd_enabled(enable_handle)
@@ -446,15 +541,58 @@ class AttServer:
     def _handle_write_cmd(self, data):
         """Handle Write Command (0x52) — no response."""
         opcode = data[0]
+        if len(data) < 3:
+            _proto_log("att_write_cmd", opcode=f"0x{opcode:02x}", error="INVALID_PDU_LEN", len=len(data))
+            return  # Write Command has no response
         handle = struct.unpack('<H', data[1:3])[0]
         value = data[3:]
 
         attr = self.db.lookup(handle)
         if attr:
             print(f"[att] ✅ Write Command: handle=0x{handle:04x} uuid={attr.uuid.hex()} len={len(value)} data={value.hex()}")
-            self.db.write_attribute(handle, value)
+
+            # Detect SC2 command byte
+            _cmd_byte = None
+            _cmd_name = None
+            if len(value) >= 2:
+                _cmd_byte = value[1]
+                _cmd_name = _SC2_CMD_NAMES.get(_cmd_byte)
+
+            # CCCD handling for Write Command (0x52): update notification state
+            # consistently with Write Request (0x12)
+            cccd_uuid = uuid16_to_bytes(0x2902)
+            enable_handle = None
+            if attr.uuid == cccd_uuid:
+                ccc_value = struct.unpack('<H', value[:2])[0] if len(value) >= 2 else 0
+                value_handle = self._find_cccd_value_handle(handle)
+                if value_handle is not None:
+                    enabled = bool(ccc_value & 0x0001)
+                    if enabled:
+                        self._notification_handles.add(value_handle)
+                    else:
+                        self._notification_handles.discard(value_handle)
+                    enable_handle = value_handle
+
+            cb_invoked = False
+            cb_result = None
+            try:
+                self.db.write_attribute(handle, value)
+                cb_invoked = True
+            except Exception as exc:
+                cb_result = f"exception:{exc}"
+
+            _proto_log("att_write_cmd", opcode=f"0x{opcode:02x}", handle=f"0x{handle:04x}",
+                       data=value.hex(),
+                       cmd=f"0x{_cmd_byte:02x}" if _cmd_byte is not None else None,
+                       cmd_name=_cmd_name,
+                       cb_invoked=cb_invoked, cb_result=cb_result)
+
+            if enable_handle is not None and self._on_cccd_enabled:
+                self._on_cccd_enabled(enable_handle)
         else:
             print(f"[att] ❌ Write Command FAILED: handle=0x{handle:04x} ERR_INVALID_HANDLE (attr not found)")
+            _proto_log("att_write_cmd", opcode=f"0x{opcode:02x}", handle=f"0x{handle:04x}",
+                       data=value.hex(), error="INVALID_HANDLE")
 
     def _send_error(self, request_opcode, handle, error_code):
         """Send ATT Error Response."""
@@ -487,9 +625,12 @@ class AttServer:
             if count == 1 or count % 200 == 0:
                 print(f"[DIAG] 🚫 NOTIFICATION DROPPED (no CCCD): handle=0x{handle:04x} len={len(value)} (dropped {count}x total)")
                 print(f"[DIAG]    Active subscriptions: {[f'0x{h:04x}' for h in sorted(self._notification_handles)]}")
+            _proto_log("att_notif_dropped", handle=f"0x{handle:04x}", len=len(value))
             return
 
-        pdu = struct.pack('<BH', ATT_OP_HANDLE_NFY, handle) + value
+        # Cap notification to MTU - 3 per ATT spec (opcode + handle)
+        capped = value[:self.mtu - 3] if len(value) > self.mtu - 3 else value
+        pdu = struct.pack('<BH', ATT_OP_HANDLE_NFY, handle) + capped
         sent = self._send(pdu)
         self.notification_count += 1
         self._diag_notif_sent[handle] += 1
@@ -497,6 +638,8 @@ class AttServer:
         # Log mouse/keyboard (len <= 8) immediately, and gamepad (len > 8) throttled
         if len(value) <= 8 or (self.notification_count % 100 == 0):
             print(f"[att] Notification sent: handle=0x{handle:04x} len={len(value)} value={value.hex()}")
+
+        _proto_log("att_notif", handle=f"0x{handle:04x}", len=len(value), sent=sent)
 
     def print_active_subscriptions(self):
         """Public method to print current CCCD subscription state."""

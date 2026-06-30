@@ -1,7 +1,7 @@
 /*
  * Slot Writer Analysis — What Code Writes to controller+slot*0xe8+0x200
  *
- * Binary: ~/.steam/debian-installation/linux64/steamclient.so
+ * Binary: ~/.steam/debian-installation/ubuntu12_32/steamclient.so (32-bit, 49MB)
  * Status: DETERMINED
  *
  * EXECUTIVE SUMMARY
@@ -18,7 +18,7 @@
  *
  * Phase 2: Feature Report Response Processing
  *   - The state machine at 0x10d4e6c processes GET_ATTRIBUTES/GET_SERIAL/0xf2 responses
- *   - Responses are stored in the state machine object (r15+0xc0 settings array)
+ *   - Responses are stored in the state machine object (esi+0xc0 settings array)
  *   - A separate function reads from the state machine and writes to the identity slot
  *   - The unique_id at slot+0x200 is written when the serial number response is processed
  *
@@ -32,7 +32,7 @@
  *    - Receives response data from ATT layer
  *    - Dispatches based on command byte (0x83=GET_ATTRIBUTES, 0x84=GET_SERIAL, 0xf2=CAPABILITIES)
  *    - For each command, calls vtable handlers to process the response
- *    - Stores parsed data in internal structures (r15+0xc0 settings array)
+ *    - Stores parsed data in internal structures (esi+0xc0 settings array)
  *
  * 2. Identity Slot Population (function at 0x105cb50, within controller.cpp)
  *    - Large function (~500 instructions) that processes controller data
@@ -58,7 +58,7 @@
  * Then at the end, writes defaults:
  *   0x105ca02: mov dword [rax + 0x1f8], ebp   ; slot+0x1f8 = slot_index
  *   0x105ca0f: mov dword [rax + 0x1fc], edx   ; slot+0x1fc = flags
- *   0x105ca15: mov dword [rbx + 0x3c], 1      ; ControllerDetails ready_flag = 1
+ *   0x105ca15: mov dword [ebx + 0x3c], 1      ; ControllerDetails ready_flag = 1
  *
  * The unique_id at slot+0x200 remains 0 after initialization.
  * It must be populated by the feature report response processing code.
@@ -133,7 +133,7 @@
 ⚠️ DISCLAIMER: WRONG BINARY ANALYZED
 
 All analysis in this file was performed on the WRONG binary:
-  ~/.steam/debian-installation/linux64/steamclient.so (46MB, 64-bit x86_64)
+  ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit) [CORRECT]
 
 Steam actually loads:
   ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit i386)

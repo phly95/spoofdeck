@@ -1,14 +1,14 @@
 /*
  * Registration Data Flow — What Data Registration Needs
  *
- * Binary: ~/.steam/debian-installation/linux64/steamclient.so
+ * Binary: ~/.steam/debian-installation/ubuntu12_32/steamclient.so (32-bit, 49MB)
  * Status: DETERMINED
  */
 
 ⚠️ DISCLAIMER: WRONG BINARY ANALYZED
 
 All analysis in this file was performed on the WRONG binary:
-  ~/.steam/debian-installation/linux64/steamclient.so (46MB, 64-bit x86_64)
+  ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit) [CORRECT]
 
 Steam actually loads:
   ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit i386)
@@ -33,9 +33,9 @@ Verified: 2026-06-29
  * Call setup (0x10b3b94-0x10b3bac):
  * 0x10b3b94: mov rdi, r12          ; r12 = [rbp-0x240] (output buffer)
  * 0x10b3b97: call 0x10a4cf0        ; init/prepare output buffer
- * 0x10b3b9c: mov esi, [rbx+0x1d8]  ; slot_index from controller obj
+ * 0x10b3b9c: mov esi, [ebx+0x1d8]  ; slot_index from controller obj
  * 0x10b3ba2: mov rdx, r12          ; output buffer
- * 0x10b3ba5: mov rdi, [rbx+0x1e0]  ; controller sub-object
+ * 0x10b3ba5: mov rdi, [ebx+0x1e0]  ; controller sub-object
  * 0x10b3bac: call 0x1070620        ; GetControllerInfo()
  *
  * If successful, the output buffer contains:
@@ -46,7 +46,7 @@ Verified: 2026-06-29
  *   [rbp-0x204..0x1f0]: more identity fields
  *
  * Version check (0x10b3bb9-0x10b3bc5):
- * 0x10b3bb9: mov eax, [rbx+0x1dc]     ; current version from controller
+ * 0x10b3bb9: mov eax, [ebx+0x1dc]     ; current version from controller
  * 0x10b3bbf: cmp [rbp-0x23c], eax      ; compare with identity secondary_id
  * 0x10b3bc5: jne 0x10b3de0             ; if changed → "controller changed"
  *
@@ -215,9 +215,9 @@ Verified: 2026-06-29
  * Request init 2:             0x10b3be8 → 0x17f91a0
  * RPC interface:              0x10b3d30 (add rdi, 0xd60)
  * RPC vtable call:            0x10b3d4e (call [rax+0x28])
- * Register method:            0x00d41760 ("AccountHardware.RegisterSteamController#1")
+ * Register method:            0x00b9ba50 ("AccountHardware.RegisterSteamController#1")
  * Complete method:            0x00ce2dc8 ("AccountHardware.CompleteSteamControllerRegistration#1")
- * Controller version field:   [rbx+0x1dc]
- * Controller sub-object:      [rbx+0x1e0]
- * Slot index field:           [rbx+0x1d8]
+ * Controller version field:   [ebx+0x1dc]
+ * Controller sub-object:      [ebx+0x1e0]
+ * Slot index field:           [ebx+0x1d8]
  */

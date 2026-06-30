@@ -1,7 +1,7 @@
 /*
  * GET_SERIAL (0xAE) Response Format — Exact Analysis
  *
- * Binary: ~/.steam/debian-installation/linux64/steamclient.so
+ * Binary: ~/.steam/debian-installation/ubuntu12_32/steamclient.so (32-bit, 49MB)
  * Function: 0x10c1f5f (initial controller setup)
  * Status: DETERMINED
  *
@@ -28,7 +28,7 @@
  * At 0x10c28be:
  *   mov r13d, 9                   ; retry count = 9
  *   mov edx, 0x17                 ; read size = 23 bytes
- *   mov rsi, r15                  ; buffer = [rbp-0x140]
+ *   mov rsi, esi                  ; buffer = [rbp-0x140]
  *   call [rax+0x38]               ; HID get_feature_report(dev, buf, 23)
  *
  * STEP 3: VALIDATE RESPONSE
@@ -213,7 +213,7 @@
 ⚠️ DISCLAIMER: WRONG BINARY ANALYZED
 
 All analysis in this file was performed on the WRONG binary:
-  ~/.steam/debian-installation/linux64/steamclient.so (46MB, 64-bit x86_64)
+  ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit) [CORRECT]
 
 Steam actually loads:
   ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit i386)

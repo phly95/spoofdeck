@@ -2,6 +2,7 @@
 
 All analysis in this file was performed on the WRONG binary:
   ~/.steam/debian-installation/linux64/steamclient.so (46MB, 64-bit x86_64)
+  [This path is INCORRECT. Steam actually loads the 32-bit binary.]
 
 Steam actually loads:
   ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit i386)
@@ -89,11 +90,11 @@ This indicates the struct is 0x54 bytes (84 bytes) with:
 
 ### Ready Flag Mechanism
 
-The critical instruction that unblocks registration:
+The critical instruction that unblocks registration (from 64-bit binary — address needs re-verification in 32-bit):
 
 ```asm
-; At 0x010929bf:
-mov dword [r15 + 0x3c], 1    ; Set ready_flag = 1
+; At 0x010929bf (64-bit — NEEDS RE-ANALYSIS in 32-bit):
+mov dword [r15 + 0x3c], 1    ; Set ready_flag = 1 (64-bit: r15, 32-bit: likely esi or ebp)
 ```
 
 This is the LAST instruction before the function returns, meaning:

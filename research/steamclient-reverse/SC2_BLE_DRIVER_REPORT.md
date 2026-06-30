@@ -4,7 +4,7 @@
 
 | File | Relevance |
 |------|-----------|
-| `~/.steam/debian-installation/linux64/steamclient.so` | **PRIMARY** - Main Steam client binary. Contains `CSteamController`, `CTritonController`, `CSteamControllerProtocolHandlerV1`, HID protocol code, feature report I/O, firmware update, controller settings |
+| `~/.steam/debian-installation/ubuntu12_32/steamclient.so` | **PRIMARY** - Main Steam client binary (32-bit i386). Contains `CSteamController`, `CTritonController`, `CSteamControllerProtocolHandlerV1`, HID protocol code, feature report I/O, firmware update, controller settings. NOTE: Prior analysis was on the wrong binary (`linux64/steamclient.so`, 64-bit). All addresses must be re-derived from this 32-bit binary. |
 | `~/.steam/debian-installation/steamrt64/steamclient.so` | **HIGH** - SteamRT64 version. Contains full BlueZ D-Bus GATT bindings (`org.bluez.GattManager1`), all `CSteamInputService_*` protobuf messages, `Triton_BLE/USB/BL/ESB` transport types |
 | `~/.steam/debian-installation/ubuntu12_64/libcef.so` | **MEDIUM** - Chromium Embedded Framework. Contains BlueZ D-Bus GATT server strings, Neptune chipset identifiers (LTX/VLT/LTS/ULS), `/dev/hidraw` |
 | `~/.steam/debian-installation/steamrt64/libSDL3.so` | **MEDIUM** - SDL3 library. Contains `SDL_hid_ble_scan`, `SDL_hid_get_report_descriptor`, `SDL_hid_send_feature_report`, `SDL_hid_get_feature_report`, hidraw references, Steam Deck Controller gamepad mapping |

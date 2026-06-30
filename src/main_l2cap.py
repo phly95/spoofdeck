@@ -15,6 +15,7 @@ The ATT server handles:
 """
 
 import argparse
+import json
 import os
 import signal
 import struct
@@ -25,6 +26,21 @@ import dbus
 import dbus.service
 import dbus.mainloop.glib
 from gi.repository import GLib
+
+# Structured protocol logging (enabled via SPOOFDECK_PROTO_LOG=1)
+_PROTO_LOG = os.environ.get('SPOOFDECK_PROTO_LOG', '') == '1'
+
+def _proto_log(event, **kwargs):
+    """Emit a structured JSON log line to stderr when SPOOFDECK_PROTO_LOG=1."""
+    if not _PROTO_LOG:
+        return
+    import time as _time
+    entry = {"ts": round(_time.monotonic(), 3), "event": event}
+    entry.update(kwargs)
+    try:
+        print(json.dumps(entry), flush=True)
+    except Exception:
+        pass
 
 from gatt_db import build_sc2_database
 from att_server import AttServer
@@ -244,6 +260,7 @@ class HoGPeripheral:
         Parses the report ID and forwards haptic commands to Neptune.
         """
         print(f"[haptic] Write callback triggered on handle 0x{handle:04x} len={len(value)} data={value.hex()}")
+        _proto_log("haptic_write", handle=f"0x{handle:04x}", len=len(value), data=value.hex())
         if len(value) < 1:
             return
         report_id = value[0]
@@ -412,11 +429,13 @@ class HoGPeripheral:
         Steam Client communicates with the controller via a command/response protocol:
           1. Host writes a command to FR 0x00 (e.g., GET_ATTRIBUTES = 0x83)
           2. Host reads FR 0x00 to retrieve the response
-        
+         
         We intercept these and return synthetic SC2-appropriate responses.
         """
         if len(value) < 2:
             print(f"[DIAG] ⚠️  SC2 command too short: {value.hex()}")
+            _proto_log("sc2_cmd", fr_id=f"0x{report_id:02x}", data=value.hex(),
+                       error="TOO_SHORT")
             return
 
         # Parse command — format is typically: [msg_type, cmd_id, ...]
@@ -476,6 +495,7 @@ class HoGPeripheral:
                 0x01,       # success status
             ])
             response += serial[:20].ljust(20, b'\x00')  # pad serial to 20 bytes
+            response += bytearray(64 - len(response))  # pad to 64 bytes
             print(f"[DIAG] 🎮 → Responding to GET_SERIAL with '{serial.decode()}'")
 
         elif cmd == self.SC2_CMD_GET_CHIP_ID:
@@ -610,6 +630,19 @@ class HoGPeripheral:
 
         self._pending_fr_response[report_id] = bytes(response)
         print(f"[DIAG] 📥 FR 0x{report_id:02x} STORED: len={len(response)} first10={response[:10].hex()} pending_keys={list(self._pending_fr_response.keys())}")
+
+        # Map cmd byte to human name
+        _SC2_CMD_NAMES = {
+            0x81: "CLEAR_DIGITAL_MAPPINGS", 0x83: "GET_ATTRIBUTES",
+            0x85: "SET_DEFAULT_DIGITAL_MAPPINGS", 0x87: "SET_SETTINGS_VALUES",
+            0x89: "GET_SETTINGS_VALUES", 0x8C: "GET_SETTINGS_DEFAULTS",
+            0x8D: "SET_CONTROLLER_MODE", 0xAE: "GET_SERIAL",
+            0xBA: "GET_CHIP_ID", 0xF2: "CAPABILITY_QUERY_UNKNOWN",
+        }
+        _proto_log("sc2_cmd", fr_id=f"0x{report_id:02x}", cmd=f"0x{cmd:02x}",
+                   cmd_name=_SC2_CMD_NAMES.get(cmd, f"UNKNOWN_0x{cmd:02x}"),
+                   data=value[:20].hex(),
+                   response=response[:64].hex(), response_len=len(response))
 
     def _proxy_feature_read(self, report_id):
         """Proxy a Feature Report read to Neptune hardware (for non-SC2 reports)."""

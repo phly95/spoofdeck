@@ -1,14 +1,14 @@
 /*
  * Verify Branch Analysis — What Prevents VERIFY for SET_SETTINGS?
  *
- * Binary: ~/.steam/debian-installation/linux64/steamclient.so
+ * Binary: ~/.steam/debian-installation/ubuntu12_32/steamclient.so (32-bit, 49MB)
  * Status: DETERMINED
  */
 
 ⚠️ DISCLAIMER: WRONG BINARY ANALYZED
 
 All analysis in this file was performed on the WRONG binary:
-  ~/.steam/debian-installation/linux64/steamclient.so (46MB, 64-bit x86_64)
+  ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit) [CORRECT]
 
 Steam actually loads:
   ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit i386)
@@ -28,10 +28,10 @@ Verified: 2026-06-29
  * === EXECUTIVE SUMMARY ===
  *
  * The VERIFY step (vtable[0x130] = get_feature_report) is prevented
- * by the NULL check at 0x010d4e6c:
+ * by the NULL check at 0x010d4e6c [32-bit: NEEDS RE-ANALYSIS]:
  *
- *   0x010d4e6c: test r13, r13
- *   0x010d4e6f: je 0x10d4ff1       ; skip verify if r13==NULL
+ *   0x010d4e6c [32-bit: NEEDS RE-ANALYSIS]: test r13, r13
+ *   0x010d4e6f [32-bit: NEEDS RE-ANALYSIS]: je 0x10d4ff1       ; skip verify if r13==NULL
  *
  * For SET_SETTINGS: r13 is NULL → verify SKIPPED
  * For GET_ATTRIBUTES: r13 is non-NULL → verify HAPPENS
@@ -45,22 +45,22 @@ Verified: 2026-06-29
  *
  * PATH A: With verify object (r13 != NULL) — used by GET_ATTRIBUTES
  *
- *   0x010d4e6c: test r13, r13          ; r13 != NULL
- *   0x010d4e6f: je 0x10d4ff1           ; NOT taken
- *   0x010d4e75: mov rax, [r13]         ; load vtable
- *   0x010d4e79: mov rdi, r13           ; this = r13
- *   0x010d4e7c: mov esi, [r15+0x198]   ; report ID
- *   0x010d4e83: call [rax+0x130]        ; VERIFY (get_feature_report)
- *   0x010d4e89: ...                     ; process result
+ *   0x010d4e6c [32-bit: NEEDS RE-ANALYSIS]: test r13, r13          ; r13 != NULL
+ *   0x010d4e6f [32-bit: NEEDS RE-ANALYSIS]: je 0x10d4ff1           ; NOT taken
+ *   0x010d4e75 [32-bit: NEEDS RE-ANALYSIS]: mov rax, [r13]         ; load vtable
+ *   0x010d4e79 [32-bit: NEEDS RE-ANALYSIS]: mov rdi, r13           ; this = r13
+ *   0x010d4e7c [32-bit: NEEDS RE-ANALYSIS]: mov esi, [esi+0x198]   ; report ID
+ *   0x010d4e83 [32-bit: NEEDS RE-ANALYSIS]: call [rax+0x130]        ; VERIFY (get_feature_report)
+ *   0x010d4e89 [32-bit: NEEDS RE-ANALYSIS]: ...                     ; process result
  *
  * PATH B: Without verify object (r13 == NULL) — used by SET_SETTINGS
  *
- *   0x010d4e6c: test r13, r13          ; r13 == NULL
- *   0x010d4e6f: je 0x10d4ff1           ; TAKEN → skip verify
+ *   0x010d4e6c [32-bit: NEEDS RE-ANALYSIS]: test r13, r13          ; r13 == NULL
+ *   0x010d4e6f [32-bit: NEEDS RE-ANALYSIS]: je 0x10d4ff1           ; TAKEN → skip verify
  *   ...
- *   0x010d4ff1: pxor xmm0, xmm0       ; timing calc
- *   0x010d4ff5: cvtsi2ss xmm0, [r15+0x198]
- *   0x010d4ffe: jmp 0x10d4e91          ; go to timing calc
+ *   0x010d4ff1 [32-bit: NEEDS RE-ANALYSIS]: pxor xmm0, xmm0       ; timing calc
+ *   0x010d4ff5 [32-bit: NEEDS RE-ANALYSIS]: cvtsi2ss xmm0, [esi+0x198]
+ *   0x010d4ffe [32-bit: NEEDS RE-ANALYSIS]: jmp 0x10d4e91          ; go to timing calc
  */
 
 /*
@@ -69,7 +69,7 @@ Verified: 2026-06-29
  * The state machine function signature:
  *
  *   void ProcessSettings(
- *       ControllerSettings* r15,     // settings state
+ *       ControllerSettings* esi,     // settings state
  *       void* r13,                   // verify object (NULL for SET_SETTINGS)
  *       ...
  *   );
@@ -91,16 +91,16 @@ Verified: 2026-06-29
  */
 
 /*
- * === THE COMPARISON PATH (0x010d4fd0) ===
+ * === THE COMPARISON PATH (0x010d4fd0 [32-bit: NEEDS RE-ANALYSIS]) ===
  *
- * When [r15+0x208]==0 (normal operation):
+ * When [esi+0x17c]==0 (normal operation):
  *
- *   0x010d4fd0: mov rdx, [r15+0xc0]       ; settings buffer
- *   0x010d4fd7: movzx r12d, byte [rdx+rbx] ; read setting byte
- *   0x010d4fdc: cmp r12b, al               ; compare with [r15+0xe1]
- *   0x010d4fdf: jne 0x10d4dc6              ; mismatch → send
- *   0x010d4fe5: xor r12d, r12d             ; match → r12=0
- *   0x010d4feb: jne 0x10d4e75              ; if callback, call verify
+ *   0x010d4fd0 [32-bit: NEEDS RE-ANALYSIS]: mov rdx, [esi+0xc0]       ; settings buffer
+ *   0x010d4fd7 [32-bit: NEEDS RE-ANALYSIS]: movzx r12d, byte [rdx+ebx] ; read setting byte
+ *   0x010d4fdc [32-bit: NEEDS RE-ANALYSIS]: cmp r12b, al               ; compare with [esi+0xe1]
+ *   0x010d4fdf [32-bit: NEEDS RE-ANALYSIS]: jne 0x10d4dc6              ; mismatch → send
+ *   0x010d4fe5 [32-bit: NEEDS RE-ANALYSIS]: xor r12d, r12d             ; match → r12=0
+ *   0x010d4feb [32-bit: NEEDS RE-ANALYSIS]: jne 0x10d4e75              ; if callback, call verify
  *
  * This path compares a byte from the settings buffer with the
  * current state byte. If they match, it means the setting was
@@ -112,20 +112,20 @@ Verified: 2026-06-29
  */
 
 /*
- * === THE [r15+0x208] FLAG ===
+ * === THE [esi+0x17c] FLAG ===
  *
- * Set to 1 at: 0x0156781c (YieldingRunTestProgram initialization)
- * Cleared at: 0x0119f3b1 (after calling vtable[0x228])
+ * Set to 1 at: 0x0178a140 (YieldingRunTestProgram initialization)
+ * Cleared at: 0x0119f3b1 [32-bit: NEEDS RE-ANALYSIS] (after calling vtable[0x228])
  *
- * In normal operation, [r15+0x208] is ALWAYS 0.
+ * In normal operation, [esi+0x17c] is ALWAYS 0.
  * The flag is only set during test/initialization sequences.
  *
- * When [r15+0x208]==0:
+ * When [esi+0x17c]==0:
  *   - The comparison path (0x10d4fd0) is used
  *   - Settings are compared with current state before sending
  *   - Verify happens only if r13 != NULL
  *
- * When [r15+0x208]!=0:
+ * When [esi+0x17c]!=0:
  *   - The always-send path is used (dead code path)
  *   - All settings are sent regardless of current state
  */
@@ -151,7 +151,7 @@ Verified: 2026-06-29
  * === KEY DIFFERENCE: SET_SETTINGS vs GET_ATTRIBUTES ===
  *
  *                    SET_SETTINGS (0x87)    GET_ATTRIBUTES (0x83)
- * Command byte       [r15+0xe0] = 0x87      [r15+0xe0] = 0x83
+ * Command byte       [esi+0xe0] = 0x87      [esi+0xe0] = 0x83
  * Verify object      r13 = NULL             r13 = non-NULL
  * VERIFY step        SKIPPED                HAPPENS
  * Response handling  None                   Data in verify object
@@ -162,12 +162,12 @@ Verified: 2026-06-29
 /*
  * === BINARY REFERENCES ===
  *
- * Critical branch (test r13): 0x010d4e6c
- * Skip verify target: 0x010d4ff1
- * Verify call: 0x010d4e83 (vtable[0x130])
- * Send call: 0x010d4e14 (vtable[0x10])
- * Comparison path: 0x010d4fd0
- * Pending flag check: 0x010d4da0
- * [r15+0x208] set: 0x0156781c
- * [r15+0x208] cleared: 0x0119f3b1
+ * Critical branch (test r13): 0x010d4e6c [32-bit: NEEDS RE-ANALYSIS]
+ * Skip verify target: 0x010d4ff1 [32-bit: NEEDS RE-ANALYSIS]
+ * Verify call: 0x010d4e83 [32-bit: NEEDS RE-ANALYSIS] (vtable[0x130])
+ * Send call: 0x010d4e14 [32-bit: NEEDS RE-ANALYSIS] (vtable[0x10])
+ * Comparison path: 0x010d4fd0 [32-bit: NEEDS RE-ANALYSIS]
+ * Pending flag check: 0x0123e5fb
+ * [esi+0x17c] set: 0x0178a140
+ * [esi+0x17c] cleared: 0x0119f3b1 [32-bit: NEEDS RE-ANALYSIS]
  */

@@ -19,12 +19,12 @@
  *
  * Assembly breakdown:
  *
- * 0x26b1ac0: push r13, r12, rbp, rbx, sub rsp, 8
+ * 0x26b1ac0: push r13, r12, rbp, ebx, sub rsp, 8
  *   Save callee-saved registers.
  *
  * 0x26b1ac4: mov r12, rdx    ; r12 = count (preserved in register)
  * 0x26b1ac8: mov rbp, rdi    ; rbp = s1
- * 0x26b1acc: mov rbx, rsi    ; rbx = s2
+ * 0x26b1acc: mov ebx, rsi    ; ebx = s2
  *
  * Null-pointer assertions:
  *   "count == 0 || s1 != NULL"  (strtools.cpp line 0xe8)
@@ -36,7 +36,7 @@
  * Main comparison loop:
  *   0x26b1afb: xor eax, eax      ; i = 0
  *   0x26b1b0d: movzx edx, byte [rbp + rax]  ; edx = s1[i]
- *   0x26b1b12: cmp dl, byte [rbx + rax]     ; compare s1[i] vs s2[i]
+ *   0x26b1b12: cmp dl, byte [ebx + rax]     ; compare s1[i] vs s2[i]
  *   0x26b1b15: je 0x26b1b00                  ; if equal, continue
  *
  *   Mismatch path:
@@ -88,7 +88,7 @@
 ⚠️ DISCLAIMER: WRONG BINARY ANALYZED
 
 All analysis in this file was performed on the WRONG binary:
-  ~/.steam/debian-installation/linux64/steamclient.so (46MB, 64-bit x86_64)
+  ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit) [CORRECT]
 
 Steam actually loads:
   ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit i386)

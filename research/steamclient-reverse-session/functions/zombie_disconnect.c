@@ -1,14 +1,14 @@
 /*
  * Zombie Disconnect Analysis — Why Controller Dies After 6 Seconds
  *
- * Binary: ~/.steam/debian-installation/linux64/steamclient.so
+ * Binary: ~/.steam/debian-installation/ubuntu12_32/steamclient.so (32-bit, 49MB)
  * Status: DETERMINED
  */
 
 ⚠️ DISCLAIMER: WRONG BINARY ANALYZED
 
 All analysis in this file was performed on the WRONG binary:
-  ~/.steam/debian-installation/linux64/steamclient.so (46MB, 64-bit x86_64)
+  ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit) [CORRECT]
 
 Steam actually loads:
   ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit i386)
@@ -60,9 +60,9 @@ Verified: 2026-06-29
  *      - Any other → zombie (return 0)
  *
  * Disassembly:
- *   0x1070620: push r15/r14/r13/r12/rbp/rbx
+ *   0x1070620: push esi/r14/r13/r12/rbp/ebx
  *   0x1070629: mov ebp, esi           ; slot index
- *   0x107062c: mov rbx, rdx           ; output struct
+ *   0x107062c: mov ebx, rdx           ; output struct
  *   0x1070641: xor eax, eax           ; default return 0
  *   0x1070643: cmp ebp, 0xf           ; if slot > 15
  *   0x1070646: ja 0x10706b4           ;   → return 0
@@ -103,7 +103,7 @@ Verified: 2026-06-29
  *      c. Check flag at offset 0x1091fd
  *      d. Load connection at [ctx+0x190]
  *      e. If connection exists, call vtable[0x28] to validate
- *      f. Check slot state byte at [rbp+rbx-0x160]
+ *      f. Check slot state byte at [rbp+ebx-0x160]
  *      g. If state == 3, check per-slot flag at [rcx+rax+0x10b4]
  *      h. If flag == 0, call 0x1070620 (zombie check)
  *      i. If zombie == true, disconnect controller
@@ -127,7 +127,7 @@ Verified: 2026-06-29
  *   0x1071d4a: je 0x1072070           ; invalid → skip
  *
  *   ; Check slot state byte
- *   0x1071f47: cmp byte [rbp+rbx-0x160], 3  ; state == 3?
+ *   0x1071f47: cmp byte [rbp+ebx-0x160], 3  ; state == 3?
  *
  *   ; Check per-slot flag
  *   0x1072013: cmp byte [rcx+rax+0x10b4], 0  ; flag == 0?
@@ -143,8 +143,8 @@ Verified: 2026-06-29
  *   0x10721d6: call 0x106d8a0          ; perform disconnect
  *
  *   ; Loop increment
- *   0x1072070: add rbx, 1              ; next slot
- *   0x1072074: cmp rbx, 0x10          ; done? (16 slots)
+ *   0x1072070: add ebx, 1              ; next slot
+ *   0x1072074: cmp ebx, 0x10          ; done? (16 slots)
  *   0x1072078: je 0x10720c0           ; → epilogue
  */
 
@@ -154,7 +154,7 @@ Verified: 2026-06-29
  * A controller is classified as zombie when ALL of these are true:
  *
  * 1. SLOT STATE BYTE == 3
- *    - Location: [rbp+rbx-0x160] where rbx = slot index
+ *    - Location: [rbp+ebx-0x160] where ebx = slot index
  *    - Value 3 indicates "previously connected/active"
  *    - Other values (0, 1, 2, 4) skip zombie check
  *
@@ -229,7 +229,7 @@ Verified: 2026-06-29
  * Slot iterator loop:         0x1071d00
  * Disconnect function:        0x106d8a0
  * "Disconnecting zombie":     0x00cbdfb8
- * "Zombie Controller":        0x00d4b088
+ * "Zombie Controller":        0x00b9b370
  * "controller_idle_poll_interval": 0x00c89dad
  * Connection offset (normal): 0x190
  * Connection offset (alt):    0x180

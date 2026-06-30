@@ -3,14 +3,14 @@
  *
  * Source of truth: SDL3 src/joystick/hidapi/SDL_hidapi_steam_triton.c
  *
- * Binary: ~/.steam/debian-installation/linux64/steamclient.so
+ * Binary: ~/.steam/debian-installation/ubuntu12_32/steamclient.so (32-bit, 49MB)
  * Status: DETERMINED (from SDL3 source)
  */
 
 ⚠️ DISCLAIMER: WRONG BINARY ANALYZED
 
 All analysis in this file was performed on the WRONG binary:
-  ~/.steam/debian-installation/linux64/steamclient.so (46MB, 64-bit x86_64)
+  ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit) [CORRECT]
 
 Steam actually loads:
   ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit i386)
@@ -112,22 +112,22 @@ Verified: 2026-06-29
  * === RELEVANT BINARY ADDRESSES ===
  *
  * CRumbleThread string: VA 0x00aa5b00
- * CRumbleThread LEA ref: VA 0x0111d10b
- *   (jump table dispatcher at 0x0111d0a0 using string as table base)
+ * CRumbleThread LEA ref: VA 0x0111d10b [32-bit: NEEDS RE-ANALYSIS]
+ *   (jump table dispatcher at 0x0111d0a0 [32-bit: NEEDS RE-ANALYSIS] using string as table base)
  *
  * TriggerHapticPulse string: VA 0x00ab43f0
- * TriggerHapticPulse LEA refs: VA 0x01320765, 0x01320784, 0x01320859, 0x013208cb
+ * TriggerHapticPulse LEA refs: VA 0x01320765 [32-bit: NEEDS RE-ANALYSIS], 0x01320784 [32-bit: NEEDS RE-ANALYSIS], 0x01320859 [32-bit: NEEDS RE-ANALYSIS], 0x013208cb [32-bit: NEEDS RE-ANALYSIS]
  *   (in IClientTimeline dispatch, hash 0xf4ee1f05)
  *
  * ForceSimpleHapticEvent string: VA 0x00ab43b0
- * ForceSimpleHapticEvent LEA refs: VA 0x0132425b, 0x0132427a, 0x013242b6, 0x01324368
+ * ForceSimpleHapticEvent LEA refs: VA 0x0132425b [32-bit: NEEDS RE-ANALYSIS], 0x0132427a [32-bit: NEEDS RE-ANALYSIS], 0x013242b6 [32-bit: NEEDS RE-ANALYSIS], 0x01324368 [32-bit: NEEDS RE-ANALYSIS]
  *
  * CWriteFeatureReportWorkItem RTTI: VA 0x00aa1880
  * CExitLizardModeWorkItem RTTI: VA 0x00aa19e0
  *
- * toggle_lizard string: VA 0x00ca6b56 (in string table at 0x02ae1ac8, index 0x1c)
+ * toggle_lizard string: VA 0x00ca6b56 (in string table at 0x02ae1ac8 [32-bit: NEEDS RE-ANALYSIS], index 0x1c)
  *   No direct LEA references — accessed via table lookup
  *
  * SDL_hid_send_feature_report string: VA 0x00cbb561
- *   Referenced at VA 0x01760fa2 (SDL HID vtable initialization)
+ *   Referenced at VA 0x00dfb22b (SDL HID vtable initialization)
  */

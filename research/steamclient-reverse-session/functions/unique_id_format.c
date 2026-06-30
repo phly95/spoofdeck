@@ -1,14 +1,14 @@
 /*
  * Unique ID Format Analysis — What Goes in controller+slot*0xe8+0x200
  *
- * Binary: ~/.steam/debian-installation/linux64/steamclient.so
+ * Binary: ~/.steam/debian-installation/ubuntu12_32/steamclient.so (32-bit, 49MB)
  * Status: DETERMINED (constraints known, exact format TBD)
  */
 
 ⚠️ DISCLAIMER: WRONG BINARY ANALYZED
 
 All analysis in this file was performed on the WRONG binary:
-  ~/.steam/debian-installation/linux64/steamclient.so (46MB, 64-bit x86_64)
+  ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit) [CORRECT]
 
 Steam actually loads:
   ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit i386)
@@ -51,7 +51,7 @@ Verified: 2026-06-29
  * +0x205  1     byte 5
  * +0x206  1     byte 6
  * +0x207  1     byte 7
- * +0x208  1     byte 8
+ * +0x17c  1     byte 8
  * +0x209  1     byte 9
  * +0x20a  1     byte 10
  * +0x20b  1     byte 11

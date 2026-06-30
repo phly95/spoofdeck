@@ -1,14 +1,14 @@
 /*
  * Registration Identity Failure — What Happens When 0x1070620 Fails
  *
- * Binary: ~/.steam/debian-installation/linux64/steamclient.so
+ * Binary: ~/.steam/debian-installation/ubuntu12_32/steamclient.so (32-bit, 49MB)
  * Status: DETERMINED
  */
 
 ⚠️ DISCLAIMER: WRONG BINARY ANALYZED
 
 All analysis in this file was performed on the WRONG binary:
-  ~/.steam/debian-installation/linux64/steamclient.so (46MB, 64-bit x86_64)
+  ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit) [CORRECT]
 
 Steam actually loads:
   ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit i386)
@@ -84,11 +84,11 @@ Verified: 2026-06-29
  * 0x10b3ec2:   xor rax, fs:[0x28]
  * 0x10b3ecb:   jne 0x10b4368
  * 0x10b3ed1:   lea rsp, [rbp-0x28]
- * 0x10b3ed5:   pop rbx
+ * 0x10b3ed5:   pop ebx
  * 0x10b3ed6:   pop r12
  * 0x10b3ed8:   pop r13
  * 0x10b3eda:   pop r14
- * 0x10b3edc:   pop r15
+ * 0x10b3edc:   pop esi
  * 0x10b3ede:   pop rbp
  * 0x10b3edf:   pop rdi           ; (alternate register restore)
  * 0x10b3ee0:   pop rbp
@@ -142,7 +142,7 @@ Verified: 2026-06-29
  * === ERROR STRINGS ===
  *
  * 0x00cd4dc0: "BYieldingRegisterSteamController - couldn't get identity before registration."
- * 0x00d263d0: "BYieldingCompleteSteamControllerRegistration - couldn't get controller identity."
+ * 0x00b9b74f: "BYieldingCompleteSteamControllerRegistration - couldn't get controller identity."
  *
  * The first is for the Register path, the second for the Complete path.
  * Both indicate 0x1070620 returned 0.
@@ -155,7 +155,7 @@ Verified: 2026-06-29
  *
  * 1. Output buffer filled with controller identity
  * 2. Version check at 0x10b3bbf:
- *    mov eax, [rbx+0x1dc]           ; current version
+ *    mov eax, [ebx+0x1dc]           ; current version
  *    cmp [rbp-0x23c], eax            ; compare with identity version
  *    jne 0x10b3de0                   ; if changed → "controller changed before registration"
  *
@@ -195,6 +195,6 @@ Verified: 2026-06-29
  * Error log:                      0x10b3f4b (lea "couldn't get controller identity")
  * Version check:                  0x10b3bbf (cmp identity version)
  * RPC call:                       0x10b3d4e (call [rax+0x28])
- * RPC method:                     0x00d41760 ("AccountHardware.RegisterSteamController#1")
+ * RPC method:                     0x00b9ba50 ("AccountHardware.RegisterSteamController#1")
  * Complete method:                0x00ce2dc8 ("AccountHardware.CompleteSteamControllerRegistration#1")
  */

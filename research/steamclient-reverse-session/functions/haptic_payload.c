@@ -1,7 +1,7 @@
 ⚠️ DISCLAIMER: WRONG BINARY ANALYZED
 
 All analysis in this file was performed on the WRONG binary:
-  ~/.steam/debian-installation/linux64/steamclient.so (46MB, 64-bit x86_64)
+  ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit) [CORRECT]
 
 Steam actually loads:
   ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit i386)
@@ -23,21 +23,21 @@ Verified: 2026-06-29
 ## Key Functions Found
 
 ### TriggerHapticPulse Function
-- Location: VA 0x013205a3 (function start)
+- Location: VA 0x013205a3 [32-bit: NEEDS RE-ANALYSIS] (function start)
 - References string "TriggerHapticPulse" at VA 0x00ab43f0
 - This is a dispatch function that handles different haptic event types
 
 ### ForceSimpleHapticEvent Function
-- Location: VA 0x01322dae (function start)
+- Location: VA 0x01322dae [32-bit: NEEDS RE-ANALYSIS] (function start)
 - References string "ForceSimpleHapticEvent" at VA 0x00ab43b0
 
 ### CRumbleThread Function
-- Location: VA 0x0111b370 (function start)
+- Location: VA 0x0111b370 [32-bit: NEEDS RE-ANALYSIS] (function start)
 - References string "CRumbleThread" at VA 0x00aa5b00
 
-## Analysis of TriggerHapticPulse (0x013205a3)
+## Analysis of TriggerHapticPulse (0x013205a3 [32-bit: NEEDS RE-ANALYSIS])
 
-The function at 0x013205a3 is a large dispatch function that:
+The function at 0x013205a3 [32-bit: NEEDS RE-ANALYSIS] is a large dispatch function that:
 1. Takes parameters: rsi (controller?), rcx (callback?), rdx (data?)
 2. Reads a hash/dword from [rsp+0x8] and dispatches based on it
 3. For TriggerHapticPulse case (hash 0xf4ee1f05):
@@ -69,11 +69,11 @@ For haptics specifically, the command likely uses:
 ## What's Missing
 
 The exact byte format of the haptic Feature Report 0x00 payload was not fully determined.
-The function at 0x013205a3 dispatches to different handlers, but the actual buffer
+The function at 0x013205a3 [32-bit: NEEDS RE-ANALYSIS] dispatches to different handlers, but the actual buffer
 construction happens deeper in the call chain.
 
 To complete this analysis, we would need to:
-1. Trace the call at 0x01320765 into the actual haptic handler
+1. Trace the call at 0x01320765 [32-bit: NEEDS RE-ANALYSIS] into the actual haptic handler
 2. Find where the 64-byte buffer is constructed
 3. Identify which bytes correspond to motor selection and intensity
 
@@ -81,7 +81,7 @@ To complete this analysis, we would need to:
 
 | String | VA | Used In |
 |--------|-----|---------|
-| TriggerHapticPulse | 0x00ab43f0 | 0x01320765, 0x01320784, 0x01320859, 0x013208cb |
-| ForceSimpleHapticEvent | 0x00ab43b0 | 0x0132425b, 0x0132427a, 0x013242b6, 0x01324368 |
-| CRumbleThread | 0x00aa5b00 | 0x0111d10b |
+| TriggerHapticPulse | 0x00ab43f0 | 0x01320765 [32-bit: NEEDS RE-ANALYSIS], 0x01320784 [32-bit: NEEDS RE-ANALYSIS], 0x01320859 [32-bit: NEEDS RE-ANALYSIS], 0x013208cb [32-bit: NEEDS RE-ANALYSIS] |
+| ForceSimpleHapticEvent | 0x00ab43b0 | 0x0132425b [32-bit: NEEDS RE-ANALYSIS], 0x0132427a [32-bit: NEEDS RE-ANALYSIS], 0x013242b6 [32-bit: NEEDS RE-ANALYSIS], 0x01324368 [32-bit: NEEDS RE-ANALYSIS] |
+| CRumbleThread | 0x00aa5b00 | 0x0111d10b [32-bit: NEEDS RE-ANALYSIS] |
 | CPulseHapticWorkItem | 0x00aa28e2 | (not found via LEA) |

@@ -5,14 +5,14 @@
  *                  SDL3 src/joystick/hidapi/steam/controller_constants.h
  *                  SDL3 src/joystick/hidapi/SDL_hidapi_steam_triton.c
  *
- * Binary: ~/.steam/debian-installation/linux64/steamclient.so
+ * Binary: ~/.steam/debian-installation/ubuntu12_32/steamclient.so (32-bit, 49MB)
  * Status: DETERMINED (from SDL3 source — not directly traced in binary)
  */
 
 ⚠️ DISCLAIMER: WRONG BINARY ANALYZED
 
 All analysis in this file was performed on the WRONG binary:
-  ~/.steam/debian-installation/linux64/steamclient.so (46MB, 64-bit x86_64)
+  ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit) [CORRECT]
 
 Steam actually loads:
   ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit i386)
@@ -194,7 +194,7 @@ Verified: 2026-06-29
  * class used specifically to exit lizard mode.
  *
  * The toggle_lizard string (VA 0x00ca6b56) is in a string table at
- * 0x02ae1ac8 (index 0x1c) — accessed via table lookup, not direct LEA.
+ * 0x02ae1ac8 [32-bit: NEEDS RE-ANALYSIS] (index 0x1c) — accessed via table lookup, not direct LEA.
  *
  * SDL_hid_send_feature_report is loaded dynamically via CDynamicFunc wrapper
  * (string at 0x00cbb561).

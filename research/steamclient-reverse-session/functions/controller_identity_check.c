@@ -1,7 +1,7 @@
 /*
  * 0x1070620 — Controller Identity Check (GetControllerInfo)
  *
- * Binary: ~/.steam/debian-installation/linux64/steamclient.so
+ * Binary: ~/.steam/debian-installation/ubuntu12_32/steamclient.so (32-bit, 49MB)
  * Function VA: 0x1070620
  * Status: DETERMINED
  *
@@ -13,7 +13,7 @@
 ⚠️ DISCLAIMER: WRONG BINARY ANALYZED
 
 All analysis in this file was performed on the WRONG binary:
-  ~/.steam/debian-installation/linux64/steamclient.so (46MB, 64-bit x86_64)
+  ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit) [CORRECT]
 
 Steam actually loads:
   ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit i386)
@@ -35,7 +35,7 @@ Verified: 2026-06-29
  * bool GetControllerInfo(
  *     void* controller_obj,     // rdi → saved as r12
  *     int   slot_index,         // esi → saved as ebp (0-15, max 0xf)
- *     ControllerInfo* output    // rdx → saved as rbx
+ *     ControllerInfo* output    // rdx → saved as ebx
  * );
  *
  * Returns: 1 = success (slot has valid controller identity)
@@ -46,14 +46,14 @@ Verified: 2026-06-29
  * === DISASSEMBLY WALKTHROUGH ===
  *
  * ; === PROLOGUE ===
- * 0x1070620: push r15
+ * 0x1070620: push esi
  * 0x1070622: push r14          ; will hold return value (0 or 1)
  * 0x1070624: push r13
  * 0x1070626: push r12          ; r12 = controller_obj
  * 0x1070628: push rbp
  * 0x1070629: mov ebp, esi      ; ebp = slot_index
- * 0x107062b: push rbx
- * 0x107062c: mov rbx, rdx      ; rbx = output buffer
+ * 0x107062b: push ebx
+ * 0x107062c: mov ebx, rdx      ; ebx = output buffer
  * 0x107062f: sub rsp, 0x58
  *
  * ; === CHECK 1: Bounds check (slot_index <= 15) ===
@@ -102,15 +102,15 @@ Verified: 2026-06-29
  *
  * ; === FAILURE PATH (0x10706b4) ===
  * ; Zeroes the entire output buffer with default values:
- * ;   [rbx+0x00..0x18] = 0
- * ;   [rbx+0x1c..0x3c] = 0
- * ;   [rbx+0x50] = 0
- * ;   [rbx+0x58] = 0
- * ;   [rbx+0x64] = "#SettingsController_SteamController" (string init)
- * ;   [rbx+0x6c] = 0x3f8000003f800000 (1.0f, 1.0f)
- * ;   [rbx+0x74] = -1 (all bits set)
- * ;   [rbx+0x80] = 0x7f7fffff7f7fffff (max floats)
- * ;   [rbx+0xa4] = 0x5ffffffff (max values)
+ * ;   [ebx+0x00..0x18] = 0
+ * ;   [ebx+0x1c..0x3c] = 0
+ * ;   [ebx+0x50] = 0
+ * ;   [ebx+0x58] = 0
+ * ;   [ebx+0x64] = "#SettingsController_SteamController" (string init)
+ * ;   [ebx+0x6c] = 0x3f8000003f800000 (1.0f, 1.0f)
+ * ;   [ebx+0x74] = -1 (all bits set)
+ * ;   [ebx+0x80] = 0x7f7fffff7f7fffff (max floats)
+ * ;   [ebx+0xa4] = 0x5ffffffff (max values)
  * ;   etc.
  * ; Returns 0 (r14d was NOT set to 1)
  *
@@ -130,15 +130,15 @@ Verified: 2026-06-29
  * ; === SUCCESS PATH (0x107086e) ===
  * 0x107086e: imul r13, rbp, 0xe8  ; r13 = slot_index * 0xe8 (slot stride)
  * 0x1070875: xor r14d, r14d       ; r14d = 0 (will be set to 1 if slot ready)
- * 0x1070878: lea r15, [r12+0x198] ; r15 = mutex (at controller+0x198)
- * 0x1070880: mov rdi, r15
+ * 0x1070878: lea esi, [r12+0x198] ; esi = mutex (at controller+0x198)
+ * 0x1070880: mov rdi, esi
  * 0x1070883: call 0xd8ae80        ; LOCK mutex
  *
  * ; === CHECK 7: Slot ready flag ===
  * 0x1070888: lea rax, [r12+r13]  ; rax = controller + slot*0xe8
  * 0x107088c: cmp byte [rax+0x200], 0  ; READY FLAG at slot+0x200
  * 0x1070893: jne 0x10708a0       ; if non-zero → slot is READY, copy data
- * 0x1070895: mov rdi, r15
+ * 0x1070895: mov rdi, esi
  * 0x1070898: call 0xd8b090       ; UNLOCK mutex
  * 0x107089d: jmp 0x1070820      ; → return 0 (slot NOT ready yet)
  *
@@ -157,7 +157,7 @@ Verified: 2026-06-29
  *
  * ; After copy, unlock mutex and set success:
  * 0x1070a54: mov r14d, 1         ; ← RETURN VALUE = 1 (SUCCESS)
- * 0x1070a51: mov rdi, r15
+ * 0x1070a51: mov rdi, esi
  * ; ... more data copy ...
  * ; Eventually: unlock mutex, return r14d (which is 1)
  */

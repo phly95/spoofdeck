@@ -1,14 +1,14 @@
 /*
  * Connection Type Detection — COMPLETE ANALYSIS
  *
- * Binary: ~/.steam/debian-installation/linux64/steamclient.so
+ * Binary: ~/.steam/debian-installation/ubuntu12_32/steamclient.so (32-bit, 49MB)
  * Status: DETERMINED
  */
 
 ⚠️ DISCLAIMER: WRONG BINARY ANALYZED
 
 All analysis in this file was performed on the WRONG binary:
-  ~/.steam/debian-installation/linux64/steamclient.so (46MB, 64-bit x86_64)
+  ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit) [CORRECT]
 
 Steam actually loads:
   ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit i386)
@@ -28,7 +28,7 @@ Verified: 2026-06-29
  * === EXECUTIVE SUMMARY ===
  *
  * Steam determines connection type (BLE, USB, Dongle) via:
- * 1. Product ID dispatch at 0x010c4a00 (primary method)
+ * 1. Product ID dispatch at 0x010c4a00 [32-bit: NEEDS RE-ANALYSIS] (primary method)
  * 2. Connection type bitfield at controller+0x180 (runtime state)
  * 3. Protobuf transport enum (wireless_transport field)
  *
@@ -37,9 +37,9 @@ Verified: 2026-06-29
  */
 
 /*
- * === METHOD 1: PRODUCT ID DISPATCH (0x010c4a00) ===
+ * === METHOD 1: PRODUCT ID DISPATCH (0x010c4a00 [32-bit: NEEDS RE-ANALYSIS]) ===
  *
- * The function at 0x010c4a00 is the main HID protocol dispatch.
+ * The function at 0x010c4a00 [32-bit: NEEDS RE-ANALYSIS] is the main HID protocol dispatch.
  * It reads the product ID from [r12+0x3c] and routes to the
  * appropriate handler path.
  *
@@ -47,25 +47,25 @@ Verified: 2026-06-29
  *   r12 → handler object (48 bytes)
  *   eax ← [r12+0x3c] (product ID)
  *
- *   cmp eax, 0x1106     → 0x010c4c30 (upper branch)
- *   cmp eax, 0x1104     → 0x010c4734
- *   cmp eax, 0x1042     → 0x010c4a59 (generic V1 HID)
- *   sub eax, 0x1101; cmp eax, 1 → ja 0x010c4b51 (unrecognized)
- *   cmp eax, 0x1303     → 0x010c4de0 (BLE path!)
- *   sub eax, 0x1304; cmp eax, 1 → jbe 0x010c4c40 (dongle path)
+ *   cmp eax, 0x1106     → 0x010c4c30 [32-bit: NEEDS RE-ANALYSIS] (upper branch)
+ *   cmp eax, 0x1104     → 0x010c4734 [32-bit: NEEDS RE-ANALYSIS]
+ *   cmp eax, 0x1042     → 0x010c4a59 [32-bit: NEEDS RE-ANALYSIS] (generic V1 HID)
+ *   sub eax, 0x1101; cmp eax, 1 → ja 0x010c4b51 [32-bit: NEEDS RE-ANALYSIS] (unrecognized)
+ *   cmp eax, 0x1303     → 0x010c4de0 [32-bit: NEEDS RE-ANALYSIS] (BLE path!)
+ *   sub eax, 0x1304; cmp eax, 1 → jbe 0x010c4c40 [32-bit: NEEDS RE-ANALYSIS] (dongle path)
  *
  * Product ID → Transport → Handler Path:
  *
- *   0x1002-0x1004  USB         0x010c4a59
- *   0x1042         Generic     0x010c4a59
- *   0x1101-0x1102  Generic     0x010c4a59
- *   0x1104         ?           0x010c4734
- *   0x1106         ?           0x010c4c30
- *   0x1142         Generic     0x010c4a59
- *   0x1220         USB         0x010c4940
- *   0x1303         BLE         0x010c4de0 → 0x010c4e0c
- *   0x1304-0x1305  Dongle      0x010c4c40
- *   0x28de         ?           0x010c48b6 → 0x010c46ec
+ *   0x1002-0x1004  USB         0x010c4a59 [32-bit: NEEDS RE-ANALYSIS]
+ *   0x1042         Generic     0x010c4a59 [32-bit: NEEDS RE-ANALYSIS]
+ *   0x1101-0x1102  Generic     0x010c4a59 [32-bit: NEEDS RE-ANALYSIS]
+ *   0x1104         ?           0x010c4734 [32-bit: NEEDS RE-ANALYSIS]
+ *   0x1106         ?           0x010c4c30 [32-bit: NEEDS RE-ANALYSIS]
+ *   0x1142         Generic     0x010c4a59 [32-bit: NEEDS RE-ANALYSIS]
+ *   0x1220         USB         0x010c4940 [32-bit: NEEDS RE-ANALYSIS]
+ *   0x1303         BLE         0x010c4de0 [32-bit: NEEDS RE-ANALYSIS] → 0x010c4e0c [32-bit: NEEDS RE-ANALYSIS]
+ *   0x1304-0x1305  Dongle      0x010c4c40 [32-bit: NEEDS RE-ANALYSIS]
+ *   0x28de         ?           0x010c48b6 [32-bit: NEEDS RE-ANALYSIS] → 0x010c46ec [32-bit: NEEDS RE-ANALYSIS]
  */
 
 /*
@@ -73,13 +73,13 @@ Verified: 2026-06-29
  *
  * Each transport path sets a flag at handler+0x08:
  *
- * BLE path (0x010c4e71):
+ * BLE path (0x010c4e71 [32-bit: NEEDS RE-ANALYSIS]):
  *   mov byte [r12 + 8], 1     ; BLE = 1
  *
- * Dongle path (0x010c4c40):
+ * Dongle path (0x010c4c40 [32-bit: NEEDS RE-ANALYSIS]):
  *   mov byte [r12 + 8], 0     ; BLE = 0
  *
- * USB path (0x010c4940):
+ * USB path (0x010c4940 [32-bit: NEEDS RE-ANALYSIS]):
  *   mov byte [r12 + 8], 0     ; BLE = 0
  *
  * This flag is a metadata marker used throughout the code to
@@ -92,7 +92,7 @@ Verified: 2026-06-29
  *
  * At runtime, the connection type is stored as a bitfield at
  * controller offset 0x180. This is loaded and checked in the
- * function at 0x0111b180:
+ * function at 0x0111b180 [32-bit: NEEDS RE-ANALYSIS]:
  *
  *   mov r13, [rdi+0x180]     ; load connection type bitfield
  *   test r13, r13
@@ -101,16 +101,16 @@ Verified: 2026-06-29
  * A jump table at 0x00aa5ab4 dispatches based on individual bit checks:
  *
  *   Bit  Shift  Location      Possible Meaning
- *   0    shr 0  0x0111b2f0    transport type A
- *   1    shr 1  0x0111b300    transport type B
- *   2    shr 2  0x0111b2d0    transport type C
- *   3    shr 3  0x0111b310    transport type D
- *   5    shr 5  0x0111b2b0    transport type E
- *   11   shr 0xb 0x0111b330   transport type F
- *   12   shr 0xc 0x0111b2c0   transport type G
- *   24   shr 0x18 0x0111b208  transport type H
- *   25   shr 0x19 0x0111b320  transport type I
- *   39   shr 0x27 0x0111b1d4  "wired" check → stored at [rsp+0xf]
+ *   0    shr 0  0x0111b2f0 [32-bit: NEEDS RE-ANALYSIS]    transport type A
+ *   1    shr 1  0x0111b300 [32-bit: NEEDS RE-ANALYSIS]    transport type B
+ *   2    shr 2  0x0111b2d0 [32-bit: NEEDS RE-ANALYSIS]    transport type C
+ *   3    shr 3  0x0111b310 [32-bit: NEEDS RE-ANALYSIS]    transport type D
+ *   5    shr 5  0x0111b2b0 [32-bit: NEEDS RE-ANALYSIS]    transport type E
+ *   11   shr 0xb 0x0111b330 [32-bit: NEEDS RE-ANALYSIS]   transport type F
+ *   12   shr 0xc 0x0111b2c0 [32-bit: NEEDS RE-ANALYSIS]   transport type G
+ *   24   shr 0x18 0x0111b208 [32-bit: NEEDS RE-ANALYSIS]  transport type H
+ *   25   shr 0x19 0x0111b320 [32-bit: NEEDS RE-ANALYSIS]  transport type I
+ *   39   shr 0x27 0x0111b1d4 [32-bit: NEEDS RE-ANALYSIS]  "wired" check → stored at [rsp+0xf]
  *
  * The bit 39 check (wired) is used to determine if the controller
  * is connected via a wired (USB) connection vs wireless (BLE/Dongle).
@@ -171,14 +171,14 @@ Verified: 2026-06-29
 /*
  * === BLE-SPECIFIC INITIALIZATION ===
  *
- * The BLE path at 0x010c4e0c sets up additional state:
+ * The BLE path at 0x010c4e0c [32-bit: NEEDS RE-ANALYSIS] sets up additional state:
  *
- *   0x010c4e56: mov edi, 0x30              ; sizeof = 48 bytes
- *   0x010c4e5f: call 0x2a6ca70             ; operator new
- *   0x010c4e71: mov byte [r12 + 8], 1     ; BLE flag = 1
- *   0x010c4e77: mov qword [r12], rax      ; vtable = 0x02ae1b58
- *   0x010c4e9d: call 0x2228880             ; string init (bond state?)
- *   0x010c4ea2: jmp 0x10c4a0e             ; common exit (vtable overwrite)
+ *   0x010c4e56 [32-bit: NEEDS RE-ANALYSIS]: mov edi, 0x30              ; sizeof = 48 bytes
+ *   0x010c4e5f [32-bit: NEEDS RE-ANALYSIS]: call 0x2a6ca70             ; operator new
+ *   0x010c4e71 [32-bit: NEEDS RE-ANALYSIS]: mov byte [r12 + 8], 1     ; BLE flag = 1
+ *   0x010c4e77 [32-bit: NEEDS RE-ANALYSIS]: mov qword [r12], rax      ; vtable = 0x02ae1b58 [32-bit: NEEDS RE-ANALYSIS]
+ *   0x010c4e9d [32-bit: NEEDS RE-ANALYSIS]: call 0x2228880             ; string init (bond state?)
+ *   0x010c4ea2 [32-bit: NEEDS RE-ANALYSIS]: jmp 0x10c4a0e             ; common exit (vtable overwrite)
  *
  * The call to 0x2228880 after BLE handler creation may initialize
  * BLE-specific state (bond management, connection parameters, etc.).
@@ -186,7 +186,7 @@ Verified: 2026-06-29
  * Related BLE strings:
  *   "tritoncontroller.cpp" at 0x00cbf534
  *   "triton bond state" at 0x00cc0a90
- *   "triton pair bond" at 0x00d0596b
+ *   "triton pair bond" at 0x00c1b97f
  *   "Failed to read triton info from controller" at 0x00cc468f
  */
 
@@ -197,23 +197,23 @@ Verified: 2026-06-29
  *
  * 1. "Controller uses V1 HID protocol\n" (0x00cef4d0)
  *    - Generic USB/unknown controller
- *    - Handler: 0x010c4a59
+ *    - Handler: 0x010c4a59 [32-bit: NEEDS RE-ANALYSIS]
  *
  * 2. "Controller uses V1 HID protocol via USB\n" (0x00cf1150)
  *    - Explicit USB connection
- *    - Handler: 0x010c4940
+ *    - Handler: 0x010c4940 [32-bit: NEEDS RE-ANALYSIS]
  *
- * 3. "Controller uses V1 HID protocol via Dongle\n" (0x00d216e0)
+ * 3. "Controller uses V1 HID protocol via Dongle\n" (0x00ba2bac)
  *    - Dongle (ESB) connection
- *    - Handler: 0x010c4c40
+ *    - Handler: 0x010c4c40 [32-bit: NEEDS RE-ANALYSIS]
  *
- * 4. "Controller uses V1 HID protocol via BLE\n" (0x00d30ce0)
+ * 4. "Controller uses V1 HID protocol via BLE\n" (0x00ba2c28)
  *    - Bluetooth LE connection
- *    - Handler: 0x010c4de0 → 0x010c4e0c
+ *    - Handler: 0x010c4de0 [32-bit: NEEDS RE-ANALYSIS] → 0x010c4e0c [32-bit: NEEDS RE-ANALYSIS]
  *
  * 5. "Unrecognized controller using V1 HID protocol\n" (0x00cef4d0)
  *    - Unknown product ID
- *    - Handler: 0x010c4b51
+ *    - Handler: 0x010c4b51 [32-bit: NEEDS RE-ANALYSIS]
  *
  * Additionally: "Controller uses V2 HID protocol" at 0x00cef00f
  *    - Newer protocol version (not used for SC2)
@@ -222,20 +222,20 @@ Verified: 2026-06-29
 /*
  * === BINARY REFERENCES ===
  *
- * Product ID dispatch: 0x010c4a00
- * BLE handler: 0x010c4de0 → 0x010c4e0c
- * Dongle handler: 0x010c4c40
- * USB handler: 0x010c4940
- * Generic handler: 0x010c4a59
- * Common exit: 0x010c4a0e
+ * Product ID dispatch: 0x010c4a00 [32-bit: NEEDS RE-ANALYSIS]
+ * BLE handler: 0x010c4de0 [32-bit: NEEDS RE-ANALYSIS] → 0x010c4e0c [32-bit: NEEDS RE-ANALYSIS]
+ * Dongle handler: 0x010c4c40 [32-bit: NEEDS RE-ANALYSIS]
+ * USB handler: 0x010c4940 [32-bit: NEEDS RE-ANALYSIS]
+ * Generic handler: 0x010c4a59 [32-bit: NEEDS RE-ANALYSIS]
+ * Common exit: 0x010c4a0e [32-bit: NEEDS RE-ANALYSIS]
  * Connection bitfield: controller+0x180
  * Jump table: 0x00aa5ab4
  * BLE flag: handler+0x08
  * Initialized flag: handler+0x28
  *
  * String references:
- * "Controller uses V1 HID protocol via BLE" at 0x00d30ce0
- * "Controller uses V1 HID protocol via Dongle" at 0x00d216e0
+ * "Controller uses V1 HID protocol via BLE" at 0x00ba2c28
+ * "Controller uses V1 HID protocol via Dongle" at 0x00ba2bac
  * "Controller uses V1 HID protocol via USB" at 0x00cf1150
  * "Controller uses V1 HID protocol" at 0x00cef4d0
  * "Unrecognized controller using V1 HID protocol" at 0x00cef4d0
@@ -244,7 +244,7 @@ Verified: 2026-06-29
  * Protobuf transport enum: 0x00a74076
  * "wireless_transport" field: 0x00ae1435
  * "tritoncontroller.cpp": 0x00cbf534
- * "triton wireless protocol": 0x00d02687
+ * "triton wireless protocol": 0x00c1b90b
  * "triton bond state": 0x00cc0a90
- * "triton pair bond": 0x00d0596b
+ * "triton pair bond": 0x00c1b97f
  */

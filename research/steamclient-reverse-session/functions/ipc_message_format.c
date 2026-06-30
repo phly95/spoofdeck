@@ -1,14 +1,14 @@
 /*
  * IPC Message Format — CGetControllerInfoWorkItem Protocol
  *
- * Binary: ~/.steam/debian-installation/linux64/steamclient.so
+ * Binary: ~/.steam/debian-installation/ubuntu12_32/steamclient.so (32-bit, 49MB)
  * Status: DETERMINED
  */
 
 ⚠️ DISCLAIMER: WRONG BINARY ANALYZED
 
 All analysis in this file was performed on the WRONG binary:
-  ~/.steam/debian-installation/linux64/steamclient.so (46MB, 64-bit x86_64)
+  ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit) [CORRECT]
 
 Steam actually loads:
   ~/.steam/debian-installation/ubuntu12_32/steamclient.so (49MB, 32-bit i386)
@@ -103,23 +103,23 @@ Verified: 2026-06-29
 /*
  * === PROTOBUF FIELD TAGS (from Binary) ===
  *
- * CHIDMessageToRemote:           0x00b3ead7
- * DeviceOpen tag:                0x00b3f9f0
- * DeviceClose tag:               0x00b3fa0a
- * DeviceWrite tag:               0x00b3fa22
- * DeviceRead tag:                0x00b3fb42  ← Used by CGetControllerInfoWorkItem
- * DeviceSendFeatureReport tag:   0x00b3ec09
- * DeviceGetFeatureReport tag:    0x00b3ec57
- * DeviceGetVendorString tag:     0x00b3eca8
- * DeviceGetProductString tag:    0x00b3ed00
- * DeviceGetSerialNumberString:   0x00b3ed5e
- * DeviceStartInputReports:       0x00b3edc0
- * DeviceRequestFullReport:       0x00b3ee28
- * DeviceDisconnect:              0x00b3ee80
+ * CHIDMessageToRemote:           0x00c94ef7
+ * DeviceOpen tag:                0x00c94f4a
+ * DeviceClose tag:               0x00c94f83
+ * DeviceWrite tag:               0x00c94fbd
+ * DeviceRead tag:                0x00c94ff6  ← Used by CGetControllerInfoWorkItem
+ * DeviceSendFeatureReport tag:   0x00c9503d
+ * DeviceGetFeatureReport tag:    0x00c95090
+ * DeviceGetVendorString tag:     0x00c950e1
+ * DeviceGetProductString tag:    0x00c95132
+ * DeviceGetSerialNumberString:   0x00c9518a
+ * DeviceStartInputReports:       0x00c951e2
+ * DeviceRequestFullReport:       0x00c95236
+ * DeviceDisconnect:              0x00c95281
  *
- * RequestResponse:               0x00b3fba8
- * UpdateDeviceList:              0x00b3fb68
- * DeviceInputReports:            0x00b3fbf0
+ * RequestResponse:               0x00c95090
+ * UpdateDeviceList:              0x00c95583
+ * DeviceInputReports:            0x00c955fb
  */
 
 /*
@@ -177,9 +177,9 @@ Verified: 2026-06-29
 /*
  * === KEY STRINGS ===
  *
- * 0x00b3ead7: "CHIDMessageToRemote"
- * 0x00b3ec09: "CHIDMessageToRemote.DeviceSendFeatureReport"
- * 0x00b3ec57: "CHIDMessageToRemote.DeviceGetFeatureReport"
+ * 0x00c94ef7: "CHIDMessageToRemote"
+ * 0x00c9503d: "CHIDMessageToRemote.DeviceSendFeatureReport"
+ * 0x00c95090: "CHIDMessageToRemote.DeviceGetFeatureReport"
  * 0x00b3fbc0: "CHIDMessageToRemote_DeviceSendFeatureReport"
  * 0x00b3fbd6: "CHIDMessageToRemote_DeviceGetFeatureReport"
  * 0x00c8ce80: "hiddevicepipesteam.cpp"
