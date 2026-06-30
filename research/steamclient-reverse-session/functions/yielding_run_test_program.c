@@ -4,10 +4,15 @@
  * The gate mechanism that controls Steam-generated haptics (0x8F dispatch).
  *
  * Binary: ~/.steam/debian-installation/linux64/steamclient.so
- * Status: VERIFIED (2026-06-29)
+ * Status: VERIFIED (2026-06-29), but [rdi+0x1d8] theory UNVERIFIED
  *
  * This document is the authoritative reference for the YieldingRunTestProgram
  * analysis. All addresses verified via radare2 targeted disassembly.
+ *
+ * IMPORTANT (2026-06-29 evening): The theory that [rdi+0x1d8] at the
+ * dispatcher 0x015675a8 represents a controller state type is UNVERIFIED.
+ * 0x1d8 may be a graphics API type (1=GL, 2=Vulkan, 3/4=D3D12).
+ * GDB watchpoint is the definitive test.
  */
 
 /*
@@ -29,6 +34,10 @@
  *
  * On native Deck: state 1-2 → YieldingRunTestProgram runs → gate opens
  * On BLE:         state 3-4 → different path → gate stays closed
+ *
+ * IMPORTANT: What [rdi+0x1d8] holds is UNVERIFIED. It may be a graphics
+ * API type (1=GL, 2=Vulkan, 3/4=D3D12) instead of a controller state.
+ * The "state 1-2 vs 3-4" routing theory needs GDB verification.
  */
 
 /*
@@ -184,15 +193,34 @@
  *   State 1-2: "primary" controller path (full init, YieldingRunTestProgram)
  *   State 3-4: "secondary" controller path (minimal init, no test program)
  *
- * This is likely a controller protocol version or connection maturity state:
- *   - Native Deck Neptune (PID 0x1205): gets state 1-2 (full initialization)
- *   - BLE SC2 spoof (PID 0x1303): gets state 3-4 (different init path)
- *   - USB SC2: likely state 1-2 (same as native)
- *   - Dongle SC2: likely state 1-2 (same as native)
+ * PREVIOUS THEORY (UNVERIFIED):
+ *   This is likely a controller protocol version or connection maturity state:
+ *     - Native Deck Neptune (PID 0x1205): gets state 1-2 (full initialization)
+ *     - BLE SC2 spoof (PID 0x1303): gets state 3-4 (different init path)
+ *     - USB SC2: likely state 1-2 (same as native)
+ *     - Dongle SC2: likely state 1-2 (same as native)
  *
- * The value is set during controller object construction, before this
- * dispatcher is called. It's not a runtime state — it's a classification
- * assigned at creation time.
+ *   The value is set during controller object construction, before this
+ *   dispatcher is called. It's not a runtime state — it's a classification
+ *   assigned at creation time.
+ *
+ * UPDATED THEORY (2026-06-29 evening) — UNVERIFIED:
+ *   The value at 0x1d8 may be a graphics API type, not a controller state:
+ *     - 0x01559070 writes [object+0x1d8] = graphics API type
+ *     - 1=GL, 2=Vulkan, 3=D3D12 path A, 4=D3D12 path B
+ *     - Values 3/4 are NEVER written as immediates to 0x1d8
+ *     - The BLE handler at 0x010c4e0c sets [r12+0x08] = 1 but it's NEVER READ
+ *     - The controller constructor reads [parent+0x1B0] into [controller+0x1d8]
+ *       but it gets overwritten later
+ *
+ *   The connection between the shader compilation path and the
+ *   YieldingRunTestProgram path is unverified. A 5-minute GDB watchpoint
+ *   would resolve this definitively.
+ *
+ * CONSERVATIVE INTERPRETATION:
+ *   Until GDB verification, treat 0x1d8 as UNVERIFIED. The dispatcher at
+ *   0x015675a8 DOES branch on it, and the gate mechanism IS verified. But
+ *   what value BLE devices get, and why, remains unknown.
  */
 
 /*
@@ -218,6 +246,10 @@
  * The SET_SETTINGS retry loop (0x87 commands) and GET_SERIAL retries
  * are SEPARATE from this mechanism. They don't affect the state value
  * at [rdi+0x1d8]. The state is set at controller object creation time.
+ *
+ * IMPORTANT: The "state set to 3-4" theory is UNVERIFIED. The actual value
+ * at [rdi+0x1d8] for BLE devices needs GDB verification. It may be a
+ * graphics API type, not a controller state.
  */
 
 /*

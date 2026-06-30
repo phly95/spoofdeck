@@ -137,7 +137,7 @@ Auto-Registering controller: F0000-0000-00000000, 12345678
 4. Starts retry timer
 5. Registers with controller system
 
-**Why it doesn't run on BLE (UPDATED 2026-06-29):** The function at `0x015675a8` (18,300 bytes, 52 basic blocks) is a **controller message dispatcher** that branches on `[rdi+0x1d8]` (controller state/type). If state is 1-2, it takes the path that includes `YieldingRunTestProgram`. If state is 3-4, it takes a different path. On BLE, the controller state is different, so the `YieldingRunTestProgram` path is never taken.
+**Why it doesn't run on BLE (UPDATED 2026-06-29 evening):** The function at `0x015675a8` (18,300 bytes, 52 basic blocks) is a **controller message dispatcher** that branches on `[rdi+0x1d8]`. If state is 1-2, it takes the path that includes `YieldingRunTestProgram`. If state is 3-4, it takes a different path. **However, the `[rdi+0x1d8]` theory is UNVERIFIED.** Recent investigation found that offset 0x1d8 is used in hundreds of places for different purposes. The value may be a **graphics API type** (1=GL, 2=Vulkan, 3=D3D12 path A, 4=D3D12 path B) written by shader compilation functions at `0x01559070`, NOT a controller state. Values 3 and 4 are NEVER written as immediate values to 0x1d8 — only 0, 1, 2, 0xFFFFFFFF, and 0x80000000. The BLE handler at `0x010c4e0c` sets `[r12+0x08] = 1` (BLE flag), but this byte is NEVER READ anywhere in the binary. The connection between the shader compilation path and the YieldingRunTestProgram path is unverified — a 5-minute GDB watchpoint would resolve this definitively.
 
 **IMPORTANT CLARIFICATION:** The `[reg+0x1b0] = 1` flag found at `0x15e2xxx` addresses is from SteamOS **update management** functions (YieldingCheckForUpdateBIOS, YieldingCheckForUpdateOS, BYieldingRunAPIJob, etc.) — completely unrelated to controllers. The `0x156d6a0` function they call is a **general-purpose job context allocator**, not HID-specific.
 
@@ -164,9 +164,9 @@ ATT Write Response (0x13) is correct — single byte, standard BLE spec. BlueZ's
 
 ### What to Investigate Next
 
-1. **LD_PRELOAD patch for 0x8F gate (RECOMMENDED)** — Patch `je 0x10d4fd0` at `0x10d4da6` to `nop nop` at runtime. This forces 0x8F dispatch regardless of `[r15+0x208]` gate. 55-65% probability of working. If it crashes, GDB watchpoint reveals what gate controls. If it works, Steam haptics (trackpad clicks, UI feedback) will flow to Neptune motors.
-2. **Why does Steam retry GET_SERIAL 19+ times on BLE?** Our handler returns valid response with 'F'-prefixed serial. Is Steam checking the write data hash? The native Deck write data has `01 05 12 00 00 02` at bytes 2-7, while BLE has `04 00 34 5e bc e8`. Steam might compute a hash from the write data and compare it to the response.
-3. **What controller state does `[rdi+0x1d8]` hold for BLE devices?** If it's 3-4 instead of 1-2, `YieldingRunTestProgram` is never reached. This is a controller type/state field set during device initialization.
+1. **GDB watchpoint on [rdi+0x1d8] (RECOMMENDED NEXT STEP)** — Set a GDB watchpoint on the memory location `[rdi+0x1d8]` during BLE connection init. Observe what value is actually read by the dispatcher at `0x015675a8`. This resolves whether 0x1d8 is a controller state, graphics API type, or something else entirely. Takes 5 minutes vs hours of static analysis. **Meta-lesson: hours of static analysis produced contradictory findings; runtime verification via GDB is the definitive approach.**
+2. **LD_PRELOAD patch for 0x8F gate (AFTER GDB VERIFICATION)** — Patch `je 0x10d4fd0` at `0x10d4da6` to `nop nop` at runtime. This forces 0x8F dispatch regardless of `[r15+0x208]` gate. 55-65% probability of working. If it crashes, GDB watchpoint reveals what gate controls. If it works, Steam haptics (trackpad clicks, UI feedback) will flow to Neptune motors.
+3. **Why does Steam retry GET_SERIAL 19+ times on BLE?** Our handler returns valid response with 'F'-prefixed serial. Is Steam checking the write data hash? The native Deck write data has `01 05 12 00 00 02` at bytes 2-7, while BLE has `04 00 34 5e bc e8`. Steam might compute a hash from the write data and compare it to the response.
 4. **What triggers the call to `0x015675a8`?** It's invoked indirectly (no direct `call` in binary) — likely through a vtable dispatch set up during controller registration. What vtable entry does our BLE device use?
 
 ## Important Rules
@@ -227,12 +227,14 @@ The haptics path is `UHID_OUTPUT` → `forward_report()`, NOT `UHID_SET_REPORT` 
 ### Verified Addresses
 | Address | Function/Label | Status |
 |---------|---------------|--------|
-| `0x015675a8` | Controller message dispatcher (18,300 bytes) | **VERIFIED** — branches on [rdi+0x1d8], state 1-2 vs 3-4 |
+| `0x015675a8` | Controller message dispatcher (18,300 bytes) | **VERIFIED** — branches on [rdi+0x1d8], but what 0x1d8 represents is UNVERIFIED (may be graphics API type, not controller state) |
 | `0x015677f4` | YieldingRunTestProgram job allocation point | **VERIFIED** — string at 0x00d6d17b, in job.cpp |
 | `0x0156781c` | `mov byte [r15+0x208], 1` | **VERIFIED** — the only write that enables 0x8F |
 | `0x010d4da0` | Gate check: `cmp byte [r15+0x208], 0` | **VERIFIED** |
 | `0x010d4e14` | vtable[0x10] dispatch | **VERIFIED** — trivial setter at 0x017605b0 |
 | `0x026b1ac0` | V_strncmp (serial validation) | **VERIFIED** — count=1, checks byte[0]=='F' |
+| `0x010c4e0c` | BLE handler sets [r12+0x08] = 1 | **VERIFIED** — but this flag is NEVER READ anywhere |
+| `0x01559070` | Writes [object+0x1d8] = graphics API type | **VERIFIED** — 1=GL, 2=Vulkan, 3/4=D3D12. BUT connection to 0x15675a8 dispatcher is UNVERIFIED |
 
 **Full analysis**: `research/steamclient-reverse-session/functions/yielding_run_test_program.c`
 

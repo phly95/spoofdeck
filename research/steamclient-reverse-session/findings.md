@@ -1171,7 +1171,91 @@ Feature report WRITE commands (SET_REPORT) arrive ~150 seconds after connection.
 
 ---
 
-*Analysis date: 2026-06-25 (updated 2026-06-28, sessions 1-7)*
+## SESSION 9 (2026-06-29 evening) — Parallel Subagent Investigation: [rdi+0x1d8] Theory UNVERIFIED
+
+### Finding: [controller+0x1d8] May NOT Be a Controller State Type
+
+**Status: UNVERIFIED — Likely graphics API type, not controller state**
+
+The function at `0x01559070` writes `[object+0x1d8]` = graphics API type:
+- `0x015647f5`: edx=1 (GL)
+- `0x01564857`: edx=1 (GL D3D variant)
+- `0x015648bc`: edx=2 (Vulkan)
+- `0x0156323f`: edx=3 (D3D12 path A)
+- `0x015632e1`: edx=4 (D3D12 path B)
+
+**However**: We are NOT certain these are the same object type as what the dispatcher at `0x015675a8` reads. Offset 0x1d8 is used in hundreds of places for different purposes (pointers, counters, state enums, shader API types). The connection between the shader compilation path and the YieldingRunTestProgram path is unverified.
+
+### Finding: Handler +0x08 BLE Flag is NEVER READ
+
+**Status: CONFIRMED**
+
+The BLE handler at `0x010c4e0c` sets `[r12+0x08] = 1` (BLE flag). But this byte is NEVER READ anywhere in the binary — not in the PID dispatch area, not in the handler's vtable methods, not elsewhere. The BLE vs USB distinction is NOT made by this flag at the code level.
+
+### Finding: Values 3 and 4 Are Never Statically Written to 0x1d8
+
+**Status: CONFIRMED**
+
+Exhaustive search found that values 3 and 4 are NEVER written as immediate values to offset 0x1d8. Only 0, 1, 2, 0xFFFFFFFF, and 0x80000000 are written. Values 3/4 would have to come from register-to-memory writes (261 candidates), which require dynamic analysis.
+
+### Finding: Controller Constructor Reads [parent+0x1B0]
+
+**Status: CONFIRMED**
+
+The controller constructor at `0x01558bb0` reads `[parent+0x1b0]` and stores it at `[controller+0x1d8]`. The parent's field at 0x1B0 is set to `0x02accf60` (a sub-vtable pointer) at `0x00f907c5` or `0x00f912bb`.
+
+**However**: The pointer at 0x1d8 gets overwritten with a small integer (1-4) later. The destructor at `0x01551560` reads [0x1d8] as a QWORD pointer, suggesting the pointer and integer coexist — the overwrite happens after construction but before the dispatcher runs.
+
+### Finding: All 8 Callers of 0x156d6a0 Found
+
+**Status: CONFIRMED**
+
+| # | Address | Function | After-call write | Timeout |
+|---|---------|----------|-----------------|---------|
+| 1 | `0x1567817` | YieldingRunTestProgram | [obj+0x208] = 1 | 60s |
+| 2 | `0x1567a7a` | YieldingRunTestProgram variant | NONE | 60s |
+| 3 | `0x15e22fe` | YieldingCheckForUpdateBIOS | [obj+0x1b0] = 1 | 120s |
+| 4 | `0x15e28ae` | YieldingCheckForUpdateOS | [obj+0x1b0] = 1 | 300s |
+| 5 | `0x15e2e8e` | BYieldingRunAPIJob A | NONE | 5s |
+| 6 | `0x15e30d6` | BYieldingRunAPIJob B | [obj+0x1b0] = 1 | 5s |
+| 7 | `0x15e354c` | BYieldingRunAPIJob C | [obj+0x1b0] = 1 | 5s |
+| 8 | `0x15e7934` | YieldingApplyUpdateBIOS | NONE | infinite |
+
+Only Caller 1 sets [0x208] = 1. Callers 3,4,6,7 set [0x1b0] = 1 (update management flag).
+
+### Finding: Connection Type Bitfield (0x180) is Separate from 0x1d8
+
+**Status: CONFIRMED**
+
+Offset 0x180 is a skip mask for controller mode initialization — it controls which controller entries are active during mode setup. It does NOT control the 0x1d8 value. 0x180 and 0x1d8 are orthogonal.
+
+### Finding: Vtable Containing 0x015675a8 is Runtime-Constructed
+
+**Status: CONFIRMED**
+
+No static vtable entry in the binary contains `0x015675a8`. The vtable is built at runtime. This confirms the LD_PRELOAD patch approach (patching the `je` at `0x10d4da6`) is the right strategy.
+
+### Finding: All ~198 Write Sites to Offset 0x1d8 Found
+
+**Status: CONFIRMED**
+
+~198 total writes to offset 0x1d8 across the binary. Most are initialization (writing 0). Key non-zero writes:
+- Values 0, 1, 2: In shader compilation functions
+- Values 3, 4: Never written as immediates (only via register)
+- Values 0xFFFFFFFF, 0x80000000: Sentinel values
+- Pointer values (0x02accf60, etc.): In job constructors
+
+### Meta-Lesson: Static Analysis vs Runtime Verification
+
+The investigation revealed that hours of static analysis produced contradictory findings, while a 5-minute GDB watchpoint would have given a definitive answer. Static analysis of offset 0x1d8 found it used in hundreds of places for different purposes. The connection between the shader compilation path and the YieldingRunTestProgram path is unverified. **Runtime verification via GDB is the definitive approach for binary analysis.**
+
+### Recommended Next Step
+
+**GDB watchpoint on [rdi+0x1d8]**: Set a GDB watchpoint on the memory location `[rdi+0x1d8]` during BLE connection init. Observe what value is actually read by the dispatcher at `0x015675a8`. This resolves whether 0x1d8 is a controller state, graphics API type, or something else entirely. Takes 5 minutes vs hours of static analysis.
+
+---
+
+*Analysis date: 2026-06-25 (updated 2026-06-29, sessions 1-9)*
 *Binary analyzed: `~/.steam/debian-installation/linux64/steamclient.so` (46,488,096 bytes)*
 *SDL3 source: `src/joystick/hidapi/SDL_hidapi_steam_triton.c` (GitHub)*
 *BlueZ binary: `/usr/libexec/bluetooth/bluetoothd`*
@@ -1457,6 +1541,8 @@ The dispatcher at `0x015675a8` reads `[rdi+0x1d8]` (controller state/type):
 
 Our BLE device has state 3 or 4, which routes to the alternative path that never sets the gate.
 
+**IMPORTANT UPDATE (2026-06-29 evening)**: The `[rdi+0x1d8]` theory is **UNVERIFIED**. See "SESSION 9" findings below for details on why 0x1d8 may NOT be a controller state type.
+
 #### What `[rdi+0x1d8]` Represents
 
 This is at offset `0x1d8` in the controller object. Given the context:
@@ -1464,6 +1550,15 @@ This is at offset `0x1d8` in the controller object. Given the context:
 - State 3-4 = "secondary" controller types (BLE SC2, other devices)
 
 This is likely a **controller protocol version** or **connection maturity state**, not just a transport type. The native Deck's Neptune controller (PID 0x1205) gets state 1-2 because it goes through a full initialization sequence. Our BLE spoof (PID 0x1303) gets state 3-4 because something in the initialization is different.
+
+**IMPORTANT UPDATE (2026-06-29 evening)**: This interpretation is **UNVERIFIED**. Recent investigation found:
+- The function at `0x01559070` writes `[object+0x1d8]` = graphics API type (1=GL, 2=Vulkan, 3=D3D12 path A, 4=D3D12 path B)
+- Values 3 and 4 are NEVER written as immediate values to 0x1d8 — only 0, 1, 2, 0xFFFFFFFF, and 0x80000000
+- The BLE handler at `0x010c4e0c` sets `[r12+0x08] = 1` (BLE flag) but this is NEVER READ anywhere
+- The controller constructor reads `[parent+0x1B0]` into `[controller+0x1d8]`, but it gets overwritten later
+- Offset 0x1d8 is used in hundreds of places for different purposes (pointers, counters, state enums, shader API types)
+
+**A 5-minute GDB watchpoint on `[rdi+0x1d8]` would resolve this definitively.** See SESSION 9 findings below.
 
 #### Connection to 0x8F
 

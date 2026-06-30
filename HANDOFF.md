@@ -99,10 +99,11 @@ We present the **Steam Deck** as a **Steam Controller 2026 (SC2 / Triton)** over
 ### 2. ~~Fix Encryption Error~~ RESOLVED (2026-06-26)
 - **Status**: Cleared after host PC reboot. Same root cause as zombie disconnect — stale BlueZ state.
 
-### 3. LD_PRELOAD Patch for Steam Haptics (RECOMMENDED NEXT STEP)
-- **Status**: Root cause fully verified. `[r15+0x208]` at `0x10d4da0` stays 0 on BLE, gate skips 0x8F dispatch. The only setter is `YieldingRunTestProgram` at `0x0156781c`, reached through a controller message dispatcher at `0x015675a8` that branches on `[rdi+0x1d8]` (controller state/type). On BLE, state is 3-4 instead of 1-2, so the path is never taken.
-- **Recommended approach**: Write a C library loaded via `LD_PRELOAD` that patches `je 0x10d4fd0` at `0x10d4da6` to `nop nop`, forcing 0x8F dispatch regardless of the gate.
-- **Probability**: 55-65% of working. If crashes, GDB watchpoint reveals what gate controls.
+### 3. LD_PRELOAD Patch for Steam Haptics (REQUIRES GDB VERIFICATION FIRST)
+- **Status**: Root cause of gate mechanism verified (`[r15+0x208]` at `0x10d4da0` stays 0 on BLE). However, what `[rdi+0x1d8]` at the dispatcher `0x015675a8` represents is **UNVERIFIED** — may be graphics API type (1=GL, 2=Vulkan, 3/4=D3D12) instead of controller state. Values 3/4 never written as immediates. The BLE handler at `0x010c4e0c` sets `[r12+0x08] = 1` (BLE flag) but this byte is NEVER READ.
+- **Recommended next step**: GDB watchpoint on `[rdi+0x1d8]` during BLE connection init — 5-minute test vs hours of static analysis. **Meta-lesson: static analysis produced contradictory findings; runtime verification via GDB is the definitive approach.**
+- **After GDB verification**: Write a C library loaded via `LD_PRELOAD` that patches `je 0x10d4fd0` at `0x10d4da6` to `nop nop`, forcing 0x8F dispatch regardless of the gate.
+- **Probability**: 55-65% of working (after dispatcher path is verified). If crashes, GDB watchpoint reveals what gate controls.
 - **Evidence**: Native Deck strace shows 16× 0x8F in 124 HIDIOCSFEATURE calls. BLE shows 0× 0x8F. Connection drops after ~30s. ATT Write Response correct. GET_SERIAL retries 19+ times on BLE vs 4 on native. Controller IS registered.
 
 ### 4. Haptics — In-Game Rumble Works, Steam Haptics Do Not
@@ -115,7 +116,7 @@ We present the **Steam Deck** as a **Steam Controller 2026 (SC2 / Triton)** over
 
 #### Steam-Generated Haptics: DO NOT WORK
 - **Status**: Trackpad clicks, UI feedback haptics, and other Steam-internal haptic events do NOT produce rumble.
-- **Root cause**: 0x8F never appears on BLE because `[r15+0x208]` gate stays 0. See section 3 above for full analysis.
+- **Root cause**: 0x8F never appears on BLE because `[r15+0x208]` gate stays 0. The dispatcher at `0x015675a8` branches on `[rdi+0x1d8]` — if state is 1-2, YieldingRunTestProgram runs and sets the gate; if state is 3-4, the alternative path is taken and the gate stays closed. **However, what `[rdi+0x1d8]` represents is UNVERIFIED** — may be graphics API type, not controller state. Values 3/4 never written as immediates. GDB watchpoint is the definitive test. See section 3 above for full analysis.
 - **Known dead end**: `0x17252a0` (haptic trigger function in steamclient.so) has ZERO callers — confirmed dead code.
 - **SET_SETTINGS notification hypothesis DISPROVEN**: Sending 45-byte ack notifications on handle 0x0033 caused ghost inputs (2026-06-28). Reverted.
 
@@ -172,8 +173,8 @@ We present the **Steam Deck** as a **Steam Controller 2026 (SC2 / Triton)** over
 ### 11. Reverse Engineering Findings (from steamclient.so)
 - **ControllerDetails_tE**: 84 bytes (0x54), ready_flag at offset 0x3c must be 1. Set by QueueFetchingControllerDetails at 0x01092820. Fields come from controller object offsets 0x84-0xd4.
 - **Product ID check**: 0x1303 is in recognized range (0x1302-0x1305). Other recognized types: 0x1142, 0x1220, 0x1201-0x1206, 0x1101-0x1102.
-- **Haptic path**: Uses SDL_hid_write() (output reports), NOT SDL_hid_send_feature_report(). Report ID 0x80, 10 bytes. Lizard mode must be OFF for haptics to work. In-game rumble via SDL_RumbleJoystick() works end-to-end. Steam-generated haptics (trackpad clicks, UI feedback) do not reach Neptune motors.
-- **SET_SETTINGS is fire-and-forget**: SDL3 confirms no `SDL_hid_get_feature_report()` after send. State machine at 0x010d466b skips VERIFY because r13 is NULL. `[r15+0x208]` is a "test mode" flag — always 0 in normal operation.
+- **Haptic path**: Uses SDL_hid_write() (output reports), NOT SDL_hid_send_feature_report(). Report ID 0x80, 10 bytes. Lizard mode must be OFF for haptics to work. In-game rumble via SDL_RumbleJoystick() works end-to-end. Steam-generated haptics (trackpad clicks, UI feedback) do not reach Neptune motors because 0x8F never dispatched — the `[rdi+0x1d8]` theory is UNVERIFIED.
+- **SET_SETTINGS is fire-and-forget**: SDL3 confirms no `SDL_hid_get_feature_report()` after send. State machine at 0x010d466b skips VERIFY because r13 is NULL. `[r15+0x208]` is a "test mode" flag — always 0 in normal BLE operation.
 - **0x1070620 is the zombie check / registration identity gate**: 7-check gate function. Checks bounds, vtable, connection state (1 or 4), and **slot ready flag at controller+slot*0xe8+0x200**. Same function used by both zombie check and registration.
 - **Identity slot populated by feature report processing**: Code at 0x10d4e6c processes GET_ATTRIBUTES/GET_SERIAL/0xf2 responses and writes to identity slot. Unique ID at slot+0x200 is the serial number — first byte MUST be non-zero.
 - **Serial validation**: V_strncmp at 0x26b1ac0 checks first byte == 'F' (0x46). Pattern at 0xd69c60.

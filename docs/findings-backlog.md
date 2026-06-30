@@ -158,12 +158,77 @@ Steam-generated haptics (trackpad clicks, UI feedback) use a different code path
 - BLE: `ae 15 04 00 34 5e bc e8 5c d7 8f c5 c8 d8 8f c5 a0 48 a7 e8 07 00`
 - Write data differs between native and BLE (different serial hashes). Our handler ignores write data and returns fixed synthetic serial. **Confidence: Confirmed**
 
-**0x8F gate hypothesis (VERIFIED):**
+**0x8F gate hypothesis (VERIFIED, but [rdi+0x1d8] theory UNVERIFIED):**
 - `[r15+0x208]` at `0x10d4da0` gates 0x8F dispatch — **VERIFIED** (audit confirmed instruction)
 - `YieldingRunTestProgram` at `0x015677f4` is the ONLY function that sets this flag to 1 — **VERIFIED** (string at 0x00d6d17b, instruction at 0x0156781c: `mov byte [r15+0x208], 1`)
 - On native Deck, this flag gets set during initialization → 0x8F commands are dispatched
 - On BLE, this flag stays 0 → 0x8F commands are never dispatched
 - Most likely cause: Feature Report write responses not handled correctly, causing initialization to stall before YieldingRunTestProgram runs. **Confidence: Confirmed**
+
+### Parallel Subagent Investigation Findings (2026-06-29 evening)
+
+**Meta-Lesson: Static Analysis vs Runtime Verification**
+The investigation revealed that hours of static analysis produced contradictory findings, while a 5-minute GDB watchpoint would have given a definitive answer. Static analysis of offset 0x1d8 found it used in hundreds of places for different purposes (pointers, counters, state enums, shader API types). The connection between the shader compilation path and the YieldingRunTestProgram path is unverified. **This is a key lesson for the project methodology: runtime verification via GDB is the definitive approach for binary analysis.** **Confidence: Confirmed**
+
+#### Finding: [controller+0x1d8] May NOT Be a Controller State Type
+
+**Status: UNVERIFIED — Likely graphics API type, not controller state**
+
+The function at `0x01559070` writes `[object+0x1d8]` = graphics API type:
+- `0x015647f5`: edx=1 (GL)
+- `0x01564857`: edx=1 (GL D3D variant)
+- `0x015648bc`: edx=2 (Vulkan)
+- `0x0156323f`: edx=3 (D3D12 path A)
+- `0x015632e1`: edx=4 (D3D12 path B)
+
+**However**: We are NOT certain these are the same object type as what the dispatcher at `0x015675a8` reads. Offset 0x1d8 is used in hundreds of places for different purposes. The connection between the shader compilation path and the YieldingRunTestProgram path is unverified. **Confidence: Speculative (circumstantial evidence only)**
+
+#### Finding: Values 3 and 4 Are Never Statically Written to 0x1d8
+
+**Status: CONFIRMED**
+
+Exhaustive search found that values 3 and 4 are NEVER written as immediate values to offset 0x1d8. Only 0, 1, 2, 0xFFFFFFFF, and 0x80000000 are written. Values 3/4 would have to come from register-to-memory writes (261 candidates), which require dynamic analysis. **Confidence: Confirmed**
+
+#### Finding: Handler +0x08 BLE Flag is NEVER READ
+
+**Status: CONFIRMED**
+
+The BLE handler at `0x010c4e0c` sets `[r12+0x08] = 1` (BLE flag). But this byte is NEVER READ anywhere in the binary — not in the PID dispatch area, not in the handler's vtable methods, not elsewhere. The BLE vs USB distinction is NOT made by this flag at the code level. **Confidence: Confirmed**
+
+#### Finding: Controller Constructor Reads [parent+0x1B0]
+
+**Status: CONFIRMED**
+
+The controller constructor at `0x01558bb0` reads `[parent+0x1b0]` and stores it at `[controller+0x1d8]`. The parent's field at 0x1B0 is set to `0x02accf60` (a sub-vtable pointer) at `0x00f907c5` or `0x00f912bb`. **However**: The pointer at 0x1d8 gets overwritten with a small integer (1-4) later. The destructor at `0x01551560` reads [0x1d8] as a QWORD pointer, suggesting the pointer and integer coexist — the overwrite happens after construction but before the dispatcher runs. **Confidence: Confirmed**
+
+#### Finding: All 8 Callers of 0x156d6a0 Found
+
+**Status: CONFIRMED**
+
+| # | Address | Function | After-call write | Timeout |
+|---|---------|----------|-----------------|---------|
+| 1 | `0x1567817` | YieldingRunTestProgram | [obj+0x208] = 1 | 60s |
+| 2 | `0x1567a7a` | YieldingRunTestProgram variant | NONE | 60s |
+| 3 | `0x15e22fe` | YieldingCheckForUpdateBIOS | [obj+0x1b0] = 1 | 120s |
+| 4 | `0x15e28ae` | YieldingCheckForUpdateOS | [obj+0x1b0] = 1 | 300s |
+| 5 | `0x15e2e8e` | BYieldingRunAPIJob A | NONE | 5s |
+| 6 | `0x15e30d6` | BYieldingRunAPIJob B | [obj+0x1b0] = 1 | 5s |
+| 7 | `0x15e354c` | BYieldingRunAPIJob C | [obj+0x1b0] = 1 | 5s |
+| 8 | `0x15e7934` | YieldingApplyUpdateBIOS | NONE | infinite |
+
+Only Caller 1 sets [0x208] = 1. Callers 3,4,6,7 set [0x1b0] = 1 (update management flag). **Confidence: Confirmed**
+
+#### Finding: Connection Type Bitfield (0x180) is Separate from 0x1d8
+
+**Status: CONFIRMED**
+
+Offset 0x180 is a skip mask for controller mode initialization — it controls which controller entries are active during mode setup. It does NOT control the 0x1d8 value. 0x180 and 0x1d8 are orthogonal. **Confidence: Confirmed**
+
+#### Finding: Vtable Containing 0x015675a8 is Runtime-Constructed
+
+**Status: CONFIRMED**
+
+No static vtable entry in the binary contains `0x015675a8`. The vtable is built at runtime. This confirms the LD_PRELOAD patch approach (patching the `je` at `0x10d4da6`) is the right strategy. **Confidence: Confirmed**
 
 ### YieldingRunTestProgram Detailed Analysis (2026-06-29)
 
@@ -190,9 +255,17 @@ Clean connection test with host BlueZ debug logging:
 9. Host BlueZ `get_report_cb()` error was from accidental double-restart — NOT a real error
 10. ATT Write Response (0x13) is correct and working — BlueZ reports success to UHID
 
-### What Investigates Next (2026-06-29)
+### What Investigates Next (2026-06-29 evening)
 
-**LD_PRELOAD patch for 0x8F gate (RECOMMENDED):**
+**GDB watchpoint on [rdi+0x1d8] (RECOMMENDED NEXT STEP):**
+- Set a GDB watchpoint on the memory location `[rdi+0x1d8]` during BLE connection init
+- Observe what value is actually read by the dispatcher at `0x015675a8`
+- Resolves whether 0x1d8 is a controller state, graphics API type, or something else
+- Takes 5 minutes vs hours of static analysis
+- **Meta-lesson: static analysis produced contradictory findings; runtime verification via GDB is the definitive approach**
+- **Confidence: Recommended (grounded in verified gate mechanism, but dispatcher input is unverified)**
+
+**LD_PRELOAD patch for 0x8F gate (AFTER GDB VERIFICATION):**
 - Patch `je 0x10d4fd0` at `0x10d4da6` to `nop nop` at runtime via `LD_PRELOAD`
 - Forces 0x8F dispatch regardless of `[r15+0x208]` gate
 - 55-65% probability of working
@@ -202,8 +275,9 @@ Clean connection test with host BlueZ debug logging:
 
 **Other open questions:**
 1. **Why does Steam retry GET_SERIAL 19+ times on BLE?** Our handler returns valid response with 'F'-prefixed serial. Steam might compute a hash from the write data and compare it to the response. Native write data: `ae 15 01 05 12 00 00 02 00...` vs BLE write data: `ae 15 04 00 34 5e bc e8 5c...`
-2. **What controller state does `[rdi+0x1d8]` hold for BLE devices?** If it's 3-4 instead of 1-2, YieldingRunTestProgram is never reached
-3. **What triggers the call to `0x015675a8`?** Invoked indirectly through vtable dispatch — what vtable entry does our BLE device use?
+2. **What does [rdi+0x1d8] actually hold for BLE devices?** UNVERIFIED — may be graphics API type (1=GL, 2=Vulkan, 3/4=D3D12) instead of controller state. Values 3/4 never written as immediates. GDB watchpoint is the definitive test.
+3. **What triggers the call to `0x015675a8`?** Invoked indirectly through vtable dispatch — vtable is runtime-constructed. What vtable entry does our BLE device use?
+4. **Why is [r12+0x08] BLE flag never read?** The handler at `0x010c4e0c` sets this flag but it's never consumed. The BLE vs USB distinction may be made elsewhere.
 
 **ATT Server Write Response Handling:**
 - Feature Report writes arrive as ATT Write Request (0x12) on handle 0x0024. **Confidence: Confirmed**
