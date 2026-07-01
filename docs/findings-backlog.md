@@ -581,5 +581,5 @@ Ghidra analysis of `IBEX_FW_6A3F2424.fw` (Triton/SC2 BLE, nRF52840, Zephyr RTOS)
 ### Extracted Files
 - `/tmp/ibex_firmware.bin` — raw firmware payload (350,528 bytes)
 - `/tmp/proteus_firmware.bin` — raw firmware payload (197,740 bytes)
-- `/tmp/decompiled_v2/` — full Ghidra exports (strings, string xrefs, call graph, decompiled C)
-- `/tmp/ghidra_fw_projects_v2/` — Ghidra project directories
+- `spoofdeck-ghidra` repo — full Ghidra exports (strings, string xrefs, call graph, decompiled C, Ghidra projects)
+- `research/` — analysis reports (HID, BLE/State, ESB/USB, cross-references) and command table

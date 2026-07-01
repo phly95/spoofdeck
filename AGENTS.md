@@ -112,12 +112,12 @@ Make a **Steam Deck** present itself as a **Steam Controller 2026 (SC2)** over *
 
 ### Firmware RE Findings (2026-06-30)
 
-Ghidra analysis of both firmware files. Full decompiled C exports at `/tmp/decompiled_v2/`.
+Ghidra analysis of both firmware files. Full decompiled C exports in `spoofdeck-ghidra` repo.
 
-| Firmware | File | Size | Functions | Lines |
-|----------|------|------|-----------|-------|
-| Triton SC2 BLE | `/tmp/ibex_firmware.bin` | 343 KB | 2,027 | 73,705 |
-| Puck Dongle | `/tmp/proteus_firmware.bin` | 194 KB | 790 | 36,117 |
+| Firmware | Repo Location | Size | Functions | Lines |
+|----------|---------------|------|-----------|-------|
+| Triton SC2 BLE | `firmware/ibex_firmware.bin` | 343 KB | 2,027 | 73,705 |
+| Puck Dongle | `firmware/proteus_firmware.bin` | 194 KB | 790 | 36,117 |
 
 **Architecture**: Nordic nRF52840 (ARM Cortex-M4F), Zephyr RTOS, nRF Connect SDK v2.9.0, Nordic SoftDevice Controller.
 
@@ -129,8 +129,9 @@ Ghidra analysis of both firmware files. Full decompiled C exports at `/tmp/decom
 - **GATT**: Only HID Service (0x1812) explicitly registered; Battery/Device Info NOT in firmware
 - **Button bitmask**: Neptune HID path matches SDL3 exactly
 
-**Ghida projects**: `/tmp/ghidra_fw_projects_v2/` (IBEX_Triton.gpr, PROTEUS_Puck.gpr)
-**Firmware extracts**: `/tmp/ibex_firmware.bin`, `/tmp/proteus_firmware.bin`
+**Ghidra projects**: `spoofdeck-ghidra` repo (IBEX_Triton.gpr, PROTEUS_Puck.gpr)
+**Firmware extracts**: `firmware/ibex_firmware.bin`, `firmware/proteus_firmware.bin`
+**Analysis reports**: `research/` (HID, BLE/State, ESB/USB, cross-references, command table)
 
 ### What Needs to Happen Next
 
