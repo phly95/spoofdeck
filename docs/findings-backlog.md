@@ -579,7 +579,7 @@ Ghidra analysis of `IBEX_FW_6A3F2424.fw` (Triton/SC2 BLE, nRF52840, Zephyr RTOS)
 - Valve-proprietary UUID 0x2A33 for Boot KB Output
 
 ### Extracted Files
-- `/tmp/ibex_firmware.bin` — raw firmware payload (350,528 bytes)
-- `/tmp/proteus_firmware.bin` — raw firmware payload (197,740 bytes)
+- `firmware/ibex_firmware.bin` — raw firmware payload (350,528 bytes)
+- `firmware/proteus_firmware.bin` — raw firmware payload (197,740 bytes)
 - `spoofdeck-ghidra` repo — full Ghidra exports (strings, string xrefs, call graph, decompiled C, Ghidra projects)
 - `research/` — analysis reports (HID, BLE/State, ESB/USB, cross-references) and command table

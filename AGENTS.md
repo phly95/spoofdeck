@@ -166,7 +166,7 @@ Ghidra analysis of both firmware files. Full decompiled C exports in `spoofdeck-
 Ghidra 11.3.1 at `~/ghidra`. Key findings:
 - `CGetControllerInfoWorkItem::RunFunc` (0x01218840) calls `SDL_hid_read_timeout` via vtable[5] and gets **0 bytes**. Retries 51 × 100ms = 5.1s, then fails. Init chain stalls before haptics enabled.
 - Init chain: `CHIDIOThread_Main` → `CWorkItemThread` → `CGetControllerInfoWorkItem` (STALLS) → `EYldWaitForControllerDetails` → gate SET (never reached)
-- Exports at `~/ghidra-projects/exports/32bit/`: functions.csv (141K), strings.csv (56K), controller_decompiled_32bit.txt, call_graph.csv
+- Exports in `spoofdeck-ghidra` repo (`steamclient_exports/`): functions.csv (141K), strings.csv (56K), controller_decompiled_32bit.txt, call_graph.csv
 
 ### Files You Must Read Before Making Changes
 
