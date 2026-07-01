@@ -6,3 +6,13 @@ __pycache__/
 /tmp/
 input_plumber/
 pii.env
+scratch/
+
+# Large generated files (Ghidra decompiled output, projects)
+firmware/*_decompiled.c
+firmware/*_full.json
+firmware/*_callgraph.json
+firmware/*_strings.json
+firmware/*_string_xrefs.json
+*.gpr
+*.rep/

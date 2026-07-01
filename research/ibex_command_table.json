@@ -1,0 +1,758 @@
+{
+  "dispatch_function": "FUN_000383c4",
+  "dispatch_function_addr": "0x000383c4",
+  "dispatch_function_size": 426,
+  "description": "Command-to-handler-descriptor lookup table in ibex (main MCU) firmware.",
+  "response_formatter": "FUN_0000c55c",
+  "response_formatter_addr": "0x0000c55c",
+  "response_formatter_size": 538,
+  "command_size_lookup": "FUN_00013c30",
+  "command_size_lookup_addr": "0x00013c30",
+  "notes": [
+    "The exact address 0x0003d596 from the task prompt does NOT exist in either firmware binary.",
+    "The jump table address 0x00053f94 also does NOT appear in the decompiled output.",
+    "This table maps command codes to DAT_xxx pointers (handler descriptors) in the 0x000386xx-0x000388xx data section.",
+    "The DAT_xxx values are opaque data pointers that the decompiler could not resolve into handler function addresses.",
+    "FUN_0000c55c is the Ibex-side response formatter for commands received from the Proteus over the IPC link.",
+    "Command 0x87 (used in our code as GET_SERIAL) is NOT in the firmware lookup table. The table skips 0x86 to 0x8a.",
+    "Command 0xAE (GET_SERIAL from Steam client RE) is also NOT in the firmware table \u2014 likely handled at Proteus level."
+  ],
+  "total_recognized_commands": 95,
+  "commands": [
+    {
+      "code": "0x00",
+      "handler_descriptor": "DAT_00038690",
+      "category": "system",
+      "description": "Command 0x00 - likely system/query",
+      "known_by_us": false
+    },
+    {
+      "code": "0x01",
+      "handler_descriptor": "DAT_00038814",
+      "category": "system",
+      "description": "Command 0x01",
+      "known_by_us": false
+    },
+    {
+      "code": "0x02",
+      "handler_descriptor": "DAT_00038694",
+      "category": "system",
+      "description": "Command 0x02",
+      "known_by_us": false
+    },
+    {
+      "code": "0x03",
+      "handler_descriptor": "DAT_00038698",
+      "category": "system",
+      "description": "Command 0x03",
+      "known_by_us": false
+    },
+    {
+      "code": "0x04",
+      "handler_descriptor": "DAT_0003869c",
+      "category": "system",
+      "description": "Command 0x04",
+      "known_by_us": false
+    },
+    {
+      "code": "0x05",
+      "handler_descriptor": "DAT_000386a0",
+      "category": "system",
+      "description": "Command 0x05",
+      "known_by_us": false
+    },
+    {
+      "code": "0x06",
+      "handler_descriptor": "DAT_000386a4",
+      "category": "system",
+      "description": "Command 0x06",
+      "known_by_us": false
+    },
+    {
+      "code": "0x07",
+      "handler_descriptor": "DAT_000386a8",
+      "category": "system",
+      "description": "Command 0x07",
+      "known_by_us": false
+    },
+    {
+      "code": "0x08",
+      "handler_descriptor": "DAT_000386ac",
+      "category": "system",
+      "description": "Command 0x08",
+      "known_by_us": false
+    },
+    {
+      "code": "0x09",
+      "handler_descriptor": "DAT_000386b4",
+      "category": "system",
+      "description": "Command 0x09 - referenced by FUN_00013c30",
+      "known_by_us": false
+    },
+    {
+      "code": "0x0a",
+      "handler_descriptor": "DAT_000386b8",
+      "category": "system",
+      "description": "Command 0x0a",
+      "known_by_us": false
+    },
+    {
+      "code": "0x0b",
+      "handler_descriptor": "DAT_000386c0",
+      "category": "system",
+      "description": "Command 0x0b - referenced by FUN_00013c30",
+      "known_by_us": false
+    },
+    {
+      "code": "0x0c",
+      "handler_descriptor": "DAT_000386c4",
+      "category": "system",
+      "description": "Command 0x0c - referenced by FUN_00013c30",
+      "known_by_us": false
+    },
+    {
+      "code": "0x0d",
+      "handler_descriptor": "DAT_000386c8",
+      "category": "system",
+      "description": "Command 0x0d",
+      "known_by_us": false
+    },
+    {
+      "code": "0x0e",
+      "handler_descriptor": "DAT_000386cc",
+      "category": "system",
+      "description": "Command 0x0e",
+      "known_by_us": false
+    },
+    {
+      "code": "0x0f",
+      "handler_descriptor": "DAT_000386d0",
+      "category": "system",
+      "description": "Command 0x0f",
+      "known_by_us": false
+    },
+    {
+      "code": "0x10",
+      "handler_descriptor": "DAT_000386d4",
+      "category": "system",
+      "description": "Command 0x10",
+      "known_by_us": false
+    },
+    {
+      "code": "0x11",
+      "handler_descriptor": "DAT_000386d8",
+      "category": "system",
+      "description": "Command 0x11",
+      "known_by_us": false
+    },
+    {
+      "code": "0x12",
+      "handler_descriptor": "DAT_000386dc",
+      "category": "system",
+      "description": "Command 0x12",
+      "known_by_us": false
+    },
+    {
+      "code": "0x13",
+      "handler_descriptor": "DAT_000386e0",
+      "category": "system",
+      "description": "Command 0x13",
+      "known_by_us": false
+    },
+    {
+      "code": "0x14",
+      "handler_descriptor": "DAT_000386e4",
+      "category": "system",
+      "description": "Command 0x14",
+      "known_by_us": false
+    },
+    {
+      "code": "0x15",
+      "handler_descriptor": "DAT_000386f0",
+      "category": "system",
+      "description": "Command 0x15",
+      "known_by_us": false
+    },
+    {
+      "code": "0x16",
+      "handler_descriptor": "DAT_000386f4",
+      "category": "system",
+      "description": "Command 0x16",
+      "known_by_us": false
+    },
+    {
+      "code": "0x17",
+      "handler_descriptor": "DAT_00038700",
+      "category": "system",
+      "description": "Command 0x17",
+      "known_by_us": false
+    },
+    {
+      "code": "0x18",
+      "handler_descriptor": "DAT_00038704",
+      "category": "system",
+      "description": "Command 0x18",
+      "known_by_us": false
+    },
+    {
+      "code": "0x19",
+      "handler_descriptor": "DAT_00038708",
+      "category": "system",
+      "description": "Command 0x19",
+      "known_by_us": false
+    },
+    {
+      "code": "0x1a",
+      "handler_descriptor": "DAT_0003870c",
+      "category": "system",
+      "description": "Command 0x1a",
+      "known_by_us": false
+    },
+    {
+      "code": "0x1b",
+      "handler_descriptor": "DAT_00038710",
+      "category": "system",
+      "description": "Command 0x1b",
+      "known_by_us": false
+    },
+    {
+      "code": "0x1c",
+      "handler_descriptor": "DAT_00038718",
+      "category": "system",
+      "description": "Command 0x1c",
+      "known_by_us": false
+    },
+    {
+      "code": "0x1d",
+      "handler_descriptor": "DAT_00038720",
+      "category": "system",
+      "description": "Command 0x1d",
+      "known_by_us": false
+    },
+    {
+      "code": "0x1e",
+      "handler_descriptor": "DAT_00038724",
+      "category": "system",
+      "description": "Command 0x1e",
+      "known_by_us": false
+    },
+    {
+      "code": "0x1f",
+      "handler_descriptor": "DAT_00038728",
+      "category": "system",
+      "description": "Command 0x1f",
+      "known_by_us": false
+    },
+    {
+      "code": "0x20",
+      "handler_descriptor": "DAT_0003872c",
+      "category": "system",
+      "description": "Command 0x20",
+      "known_by_us": false
+    },
+    {
+      "code": "0x21",
+      "handler_descriptor": "DAT_00038730",
+      "category": "system",
+      "description": "Command 0x21",
+      "known_by_us": false
+    },
+    {
+      "code": "0x22",
+      "handler_descriptor": "DAT_00038734",
+      "category": "system",
+      "description": "Command 0x22",
+      "known_by_us": false
+    },
+    {
+      "code": "0x23",
+      "handler_descriptor": "DAT_00038738",
+      "category": "system",
+      "description": "Command 0x23",
+      "known_by_us": false
+    },
+    {
+      "code": "0x24",
+      "handler_descriptor": "DAT_0003873c",
+      "category": "system",
+      "description": "Command 0x24",
+      "known_by_us": false
+    },
+    {
+      "code": "0x2d",
+      "handler_descriptor": "DAT_00038744",
+      "category": "config",
+      "description": "Command 0x2d",
+      "known_by_us": false
+    },
+    {
+      "code": "0x2e",
+      "handler_descriptor": "DAT_0003874c",
+      "category": "config",
+      "description": "Command 0x2e",
+      "known_by_us": false
+    },
+    {
+      "code": "0x3c",
+      "handler_descriptor": "DAT_00038750",
+      "category": "config",
+      "description": "Command 0x3c",
+      "known_by_us": false
+    },
+    {
+      "code": "0x3d",
+      "handler_descriptor": "DAT_000387b0",
+      "category": "config",
+      "description": "Command 0x3d",
+      "known_by_us": false
+    },
+    {
+      "code": "0x3e",
+      "handler_descriptor": "DAT_00038754",
+      "category": "config",
+      "description": "Command 0x3e - settings/config",
+      "known_by_us": false
+    },
+    {
+      "code": "0x3f",
+      "handler_descriptor": "DAT_00038758",
+      "category": "config",
+      "description": "Command 0x3f",
+      "known_by_us": false
+    },
+    {
+      "code": "0x40",
+      "handler_descriptor": "DAT_0003875c",
+      "category": "config",
+      "description": "Command 0x40",
+      "known_by_us": false
+    },
+    {
+      "code": "0x41",
+      "handler_descriptor": "DAT_00038760",
+      "category": "config",
+      "description": "Command 0x41",
+      "known_by_us": false
+    },
+    {
+      "code": "0x42",
+      "handler_descriptor": "DAT_00038764",
+      "category": "config",
+      "description": "Command 0x42",
+      "known_by_us": false
+    },
+    {
+      "code": "0x43",
+      "handler_descriptor": "DAT_00038768",
+      "category": "config",
+      "description": "Command 0x43",
+      "known_by_us": false
+    },
+    {
+      "code": "0x44",
+      "handler_descriptor": "DAT_0003876c",
+      "category": "config",
+      "description": "Command 0x44",
+      "known_by_us": false
+    },
+    {
+      "code": "0x45",
+      "handler_descriptor": "DAT_00038770",
+      "category": "input_report",
+      "description": "Standard gamepad input report (12-byte)",
+      "known_by_us": true
+    },
+    {
+      "code": "0x46",
+      "handler_descriptor": "DAT_00038774",
+      "category": "input_report",
+      "description": "Alternate input report",
+      "known_by_us": false
+    },
+    {
+      "code": "0x47",
+      "handler_descriptor": "DAT_00038778",
+      "category": "input_report",
+      "description": "Extended input report (45-byte, SC2 custom with trackpads/gyro)",
+      "known_by_us": true
+    },
+    {
+      "code": "0x4a",
+      "handler_descriptor": "DAT_00038780",
+      "category": "led",
+      "description": "LED control command",
+      "known_by_us": false
+    },
+    {
+      "code": "0x4d",
+      "handler_descriptor": "DAT_00038784",
+      "category": "led",
+      "description": "LED control command",
+      "known_by_us": false
+    },
+    {
+      "code": "0x53",
+      "handler_descriptor": "DAT_00038788",
+      "category": "config",
+      "description": "Command 0x53",
+      "known_by_us": false
+    },
+    {
+      "code": "0x54",
+      "handler_descriptor": "DAT_0003878c",
+      "category": "config",
+      "description": "Command 0x54",
+      "known_by_us": false
+    },
+    {
+      "code": "0x55",
+      "handler_descriptor": "DAT_00038790",
+      "category": "config",
+      "description": "Command 0x55",
+      "known_by_us": false
+    },
+    {
+      "code": "0x56",
+      "handler_descriptor": "DAT_00038794",
+      "category": "config",
+      "description": "Command 0x56",
+      "known_by_us": false
+    },
+    {
+      "code": "0x57",
+      "handler_descriptor": "DAT_00038798",
+      "category": "config",
+      "description": "Command 0x57",
+      "known_by_us": false
+    },
+    {
+      "code": "0x58",
+      "handler_descriptor": "DAT_0003879c",
+      "category": "config",
+      "description": "Command 0x58",
+      "known_by_us": false
+    },
+    {
+      "code": "0x5a",
+      "handler_descriptor": "DAT_000387a0",
+      "category": "config",
+      "description": "Command 0x5a",
+      "known_by_us": false
+    },
+    {
+      "code": "0x5b",
+      "handler_descriptor": "DAT_000387a4",
+      "category": "config",
+      "description": "Command 0x5b",
+      "known_by_us": false
+    },
+    {
+      "code": "0x5c",
+      "handler_descriptor": "DAT_000387a8",
+      "category": "config",
+      "description": "Command 0x5c",
+      "known_by_us": false
+    },
+    {
+      "code": "0x5f",
+      "handler_descriptor": "DAT_000387f8",
+      "category": "config",
+      "description": "Command 0x5f",
+      "known_by_us": false
+    },
+    {
+      "code": "0x68",
+      "handler_descriptor": "DAT_000387cc",
+      "category": "calibration",
+      "description": "Trackpad/touch calibration",
+      "known_by_us": false
+    },
+    {
+      "code": "0x69",
+      "handler_descriptor": "DAT_000387ac",
+      "category": "calibration",
+      "description": "Calibration",
+      "known_by_us": false
+    },
+    {
+      "code": "0x6a",
+      "handler_descriptor": "DAT_000387b4",
+      "category": "calibration",
+      "description": "Calibration",
+      "known_by_us": false
+    },
+    {
+      "code": "0x6b",
+      "handler_descriptor": "DAT_000387b8",
+      "category": "calibration",
+      "description": "Calibration",
+      "known_by_us": false
+    },
+    {
+      "code": "0x6c",
+      "handler_descriptor": "DAT_000387bc",
+      "category": "calibration",
+      "description": "Calibration",
+      "known_by_us": false
+    },
+    {
+      "code": "0x6d",
+      "handler_descriptor": "DAT_000387c0",
+      "category": "calibration",
+      "description": "Calibration",
+      "known_by_us": false
+    },
+    {
+      "code": "0x6e",
+      "handler_descriptor": "DAT_000387c4",
+      "category": "calibration",
+      "description": "Calibration",
+      "known_by_us": false
+    },
+    {
+      "code": "0x6f",
+      "handler_descriptor": "DAT_000387c8",
+      "category": "calibration",
+      "description": "Calibration",
+      "known_by_us": false
+    },
+    {
+      "code": "0x70",
+      "handler_descriptor": "DAT_000387d0",
+      "category": "calibration",
+      "description": "Calibration",
+      "known_by_us": false
+    },
+    {
+      "code": "0x71",
+      "handler_descriptor": "DAT_000387d8",
+      "category": "calibration",
+      "description": "Calibration",
+      "known_by_us": false
+    },
+    {
+      "code": "0x72",
+      "handler_descriptor": "DAT_00038748",
+      "category": "calibration",
+      "description": "Calibration",
+      "known_by_us": false
+    },
+    {
+      "code": "0x73",
+      "handler_descriptor": "DAT_000386f8",
+      "category": "calibration",
+      "description": "Calibration",
+      "known_by_us": false
+    },
+    {
+      "code": "0x74",
+      "handler_descriptor": "DAT_00038804",
+      "category": "calibration",
+      "description": "Calibration",
+      "known_by_us": false
+    },
+    {
+      "code": "0x75",
+      "handler_descriptor": "DAT_000386e8",
+      "category": "calibration",
+      "description": "Calibration",
+      "known_by_us": false
+    },
+    {
+      "code": "0x76",
+      "handler_descriptor": "DAT_00038714",
+      "category": "calibration",
+      "description": "Calibration",
+      "known_by_us": false
+    },
+    {
+      "code": "0x77",
+      "handler_descriptor": "DAT_000386ec",
+      "category": "calibration",
+      "description": "Calibration",
+      "known_by_us": false
+    },
+    {
+      "code": "0x78",
+      "handler_descriptor": "DAT_000386b0",
+      "category": "calibration",
+      "description": "Calibration",
+      "known_by_us": false
+    },
+    {
+      "code": "0x79",
+      "handler_descriptor": "DAT_000386bc",
+      "category": "calibration",
+      "description": "Calibration",
+      "known_by_us": false
+    },
+    {
+      "code": "0x7a",
+      "handler_descriptor": "DAT_00038800",
+      "category": "battery_power",
+      "description": "Battery/power",
+      "known_by_us": false
+    },
+    {
+      "code": "0x7b",
+      "handler_descriptor": "DAT_0003877c",
+      "category": "battery_power",
+      "description": "Battery/power",
+      "known_by_us": false
+    },
+    {
+      "code": "0x7c",
+      "handler_descriptor": "DAT_000387e0",
+      "category": "battery_power",
+      "description": "Battery/power",
+      "known_by_us": false
+    },
+    {
+      "code": "0x7d",
+      "handler_descriptor": "DAT_000387d4",
+      "category": "battery_power",
+      "description": "Battery/power",
+      "known_by_us": false
+    },
+    {
+      "code": "0x7e",
+      "handler_descriptor": "DAT_000386fc",
+      "category": "battery_power",
+      "description": "Battery/power",
+      "known_by_us": false
+    },
+    {
+      "code": "0x7f",
+      "handler_descriptor": "DAT_000387e4",
+      "category": "battery_power",
+      "description": "Battery/power",
+      "known_by_us": false
+    },
+    {
+      "code": "0x80",
+      "handler_descriptor": "DAT_000387dc",
+      "category": "haptic",
+      "description": "Haptic/rumble output command",
+      "known_by_us": true
+    },
+    {
+      "code": "0x86",
+      "handler_descriptor": "DAT_0003871c",
+      "category": "config",
+      "description": "Command 0x86",
+      "known_by_us": false
+    },
+    {
+      "code": "0x8a",
+      "handler_descriptor": "DAT_00038740",
+      "category": "firmware",
+      "description": "Firmware/bootloader",
+      "known_by_us": false
+    },
+    {
+      "code": "0x8b",
+      "handler_descriptor": "DAT_000387fc",
+      "category": "firmware",
+      "description": "Firmware/bootloader",
+      "known_by_us": false
+    },
+    {
+      "code": "0x8c",
+      "handler_descriptor": "DAT_000387e8",
+      "category": "firmware",
+      "description": "Firmware/bootloader",
+      "known_by_us": false
+    },
+    {
+      "code": "0x8d",
+      "handler_descriptor": "DAT_000387ec",
+      "category": "firmware",
+      "description": "Firmware/bootloader",
+      "known_by_us": false
+    },
+    {
+      "code": "0x8e",
+      "handler_descriptor": "DAT_000387f0",
+      "category": "firmware",
+      "description": "Firmware/bootloader",
+      "known_by_us": false
+    },
+    {
+      "code": "0x8f",
+      "handler_descriptor": "DAT_000387f4",
+      "category": "firmware",
+      "description": "Sub-command dispatcher",
+      "known_by_us": true
+    }
+  ],
+  "additional_known_commands": [
+    {
+      "code": "0x81",
+      "description": "ClearDigitalMappings (lizard mode disable)",
+      "known_by_us": true,
+      "source": "NEPTUNE_LIZARD_OFF_CMDS in input_handler.py"
+    },
+    {
+      "code": "0x82",
+      "description": "Handled in FUN_0000c55c: returns error code 0xd",
+      "known_by_us": true,
+      "source": "FUN_0000c55c response formatter"
+    },
+    {
+      "code": "0x83",
+      "description": "GET_ATTRIBUTES - queries controller capability attributes",
+      "known_by_us": true,
+      "source": "steamclient.so analysis"
+    },
+    {
+      "code": "0xAE",
+      "description": "GET_SERIAL - queries controller serial number",
+      "known_by_us": true,
+      "source": "steamclient.so analysis"
+    },
+    {
+      "code": "0x87",
+      "description": "GET_SERIAL in our code (NOT in firmware table - may be Proteus-handled)",
+      "known_by_us": true,
+      "source": "att_server.py synthetic handler"
+    }
+  ],
+  "response_formatter_cases": {
+    "0x82": "Returns error: param_2[0]=0xff, param_2[1]=0x0d",
+    "0x83": "Returns error: param_2[0]=0xff, param_2[1]=0x02",
+    "0x01": "Response code 0x0c, payload 8 bytes",
+    "0x02": "Response code 0x1a, payload 1 byte",
+    "0x04": "Response code 0x3e, payload 0x14 bytes",
+    "0x05": "Response code 0x3e, payload 4 bytes",
+    "0x06": "Response code 0x3e, payload 3 bytes",
+    "0x07": "Response code 0x3e, payload 5 bytes",
+    "0x08": "Response code 5, payload 4 bytes",
+    "0x09": "Response code 8, payload 4 bytes",
+    "0x0a": "Response code 0x30, payload 3 bytes",
+    "0x0b": "Response code 0x13, variable payload",
+    "0x0c": "Response code 0x57, payload 2 bytes",
+    "0x0d": "Response code 0x0e, validates param_2[3:5]==0x2083",
+    "0x10": "Complex: builds 20 or 30 byte controller state data",
+    "0x11": "Response code 0x3e, sub-code 7",
+    "0x12": "Response code 0x3e, sub-code 0x0c",
+    "0x13": "Response code 0x3e, sub-code 0x12",
+    "0x14": "Response code 0x3e, sub-code 0x13",
+    "0x15": "Response code 0x3e, sub-code 0x20",
+    "0x16": "Response code 0x3e, sub-code 0x21",
+    "0x17": "Response code 0xff, sub-code 0xa2",
+    "0x18": "Response code 0xff, sub-code 0xa3",
+    "0x19": "Response code 0xff, sub-code 0x80"
+  },
+  "missing_code_ranges": [
+    "0x25-0x2c (8 codes)",
+    "0x2f-0x3b (13 codes)",
+    "0x48-0x49 (2 codes)",
+    "0x4b-0x4c (2 codes)",
+    "0x4e-0x52 (5 codes)",
+    "0x59 (1 code)",
+    "0x5d-0x5e (2 codes)",
+    "0x60-0x67 (8 codes)",
+    "0x81-0x85 (5 codes)",
+    "0x87-0x89 (3 codes)"
+  ]
+}
