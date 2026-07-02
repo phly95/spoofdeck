@@ -52,6 +52,8 @@ SC2 Custom Input Reports (0x45, 0x47) appear in **two** services simultaneously:
 
 Both copies get the same notification data. The HID Service copies feed the hog-ll/UHID pipeline; the Valve Custom copies are read directly by Steam's controller initialization code.
 
+At runtime, every 45-byte SC2 input report is sent as an ATT notification on **both** handles simultaneously (`main_l2cap.py:857-861`). The Valve Custom handle (`_sc2_report_handle`) and the HID Service CHR_REPORT handle (`_sc2_hid_handle`) receive identical data. This ensures both the hog-ll/UHID pipeline (which feeds `/dev/hidrawN` for games) and Steam's direct Valve UUID reads (which feed the controller initialization chain) get the input data.
+
 #### The CCCD Timing Gap
 
 The CCCD subscription timing is the **root cause of missing Steam haptics**. Here's why:
@@ -255,6 +257,8 @@ Key strings from Steam Client:
 
 ## SC2 Command Bytes (Feature Report 0x00)
 
+**Note**: The Feature Report protocol uses a write-then-read pattern — the host writes a command to FR 0x00, then reads FR 0x00 to get the response. This is non-standard BLE HID behavior. See `docs/att-server-implementation.md` "Feature Report Protocol" section for the full flow, including the dual response mechanism and lifecycle. For the Steam-side implementation, see `research/archive/steamclient-reverse-session/findings.md` (Feature Report handshake analysis).
+
 ### Firmware-Confirmed Command Table (100 commands)
 
 The firmware's main command dispatch (`FUN_000383c4` at `0x000383c4`) uses a jump table at `0x00053f94` with **95 entries**. An additional 5 commands are handled outside the main table. **100 total commands** identified from firmware RE.
@@ -384,3 +388,21 @@ The Steam Deck controller ("Neptune") uses:
 - Virtual Xbox 360 pad via hid-steam driver
 
 The SC2 BLE profile is significantly simpler, using a single GATT service with characteristics for input/output.
+
+## Structured Protocol Logging
+
+Set `SPOOFDECK_PROTO_LOG=1` to enable JSON logging to stderr for ATT opcodes, notifications, haptics, and SC2 commands. Parse with `scripts/extract_proto_trace.py`.
+
+### Event Schema
+
+| Event | Fields | Description |
+|-------|--------|-------------|
+| `att_mtu_req` | `opcode`, `client_mtu`, `server_mtu`, `negotiated` | MTU exchange |
+| `att_read_req` | `opcode`, `handle`, `data`, `response`, `response_len` | Read Request/Response |
+| `att_read_blob` | `opcode`, `handle`, `offset`, `response_len` | Read Blob Request |
+| `att_write_req` | `opcode`, `handle`, `data`, `cmd`, `cmd_name`, `response`, `cb_invoked` | Write Request (+ SC2 command detection) |
+| `att_write_cmd` | `opcode`, `handle`, `data`, `cmd`, `cmd_name` | Write Command |
+| `att_notif` | `handle`, `len`, `sent` | Notification sent |
+| `att_notif_dropped` | `handle`, `len` | Notification dropped (no CCCD) |
+| `haptic_write` | `report_id`, `data`, `left_speed`, `right_speed` | Haptic output received |
+| `sc2_cmd` | `cmd_byte`, `cmd_name`, `data`, `response_len` | SC2 command processed |

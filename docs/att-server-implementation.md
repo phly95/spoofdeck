@@ -191,6 +191,44 @@ Notifications are capped to MTU - 3 bytes per ATT spec (opcode `0x1B` = 1 byte +
 
 If `send_notification()` is called for a handle not in `_notification_handles` (no CCCD enabled), the notification is silently dropped and counted in `_diag_notif_dropped`. The first drop and every 200th subsequent drop per handle are logged. This is useful for diagnosing subscription issues.
 
+## Threading Model
+
+The system runs two concurrent threads:
+
+```
+┌──────────────────────┐     ┌──────────────────────────┐
+│   GLib Main Loop     │     │   ATT Server Thread       │
+│   (D-Bus callbacks)  │     │   (att_server.py daemon)  │
+│                      │     │                            │
+│  _on_input_report()  │────▶│  send_notification()       │
+│  _on_haptic_write()  │     │  _handle_write()           │
+│  _on_cccd_enabled()  │◀────│  _handle_mtu_req()         │
+└──────────────────────┘     └──────────────────────────┘
+```
+
+### Shared Mutable State
+
+These fields are accessed from both threads without locks:
+
+| Field | Write Thread | Read Thread | Risk |
+|-------|-------------|-------------|------|
+| `_notification_handles` | ATT (CCCD write) | GLib (send_notification) | Notification sent/dropped based on stale set |
+| `mtu` | ATT (MTU exchange) | GLib (send_notification capping) | Notification may be capped to wrong MTU |
+| `steam_input_mode` | ATT (mode switch) or GLib (CCCD auto-switch) | GLib (input report routing) | Report routed to wrong mode |
+| `_pending_fr_response` | ATT (SC2 command handler) | GLib (FR read handler) | Response lost or stale |
+| `conn` | ATT accept/cleanup | GLib (connected property) | Racy check, but safe due to exception handling |
+
+**Why this works in practice**: CPython's GIL prevents memory corruption on shared objects. Set mutations (`add`/`discard`) and dict assignments are atomic at the bytecode level. The worst case is a logical race (stale read), not a crash. Exception handling in `_send()` (`att_server.py:612-621`) catches send errors on disconnected sockets.
+
+**Why it could break**: Any refactoring that introduces multi-step operations on shared state (e.g., check-then-act on `_notification_handles`) will create TOCTOU races. If the project moves to a non-CPython runtime (PyPy, GraalPy), the GIL guarantees change.
+
+### How CCCD Callbacks Bridge the Threads
+
+When the ATT thread processes a CCCD write, it calls `_on_cccd_enabled(handle)` (`att_server.py:548-549`). This callback is defined in `main_l2cap.py:737-779` and runs on the ATT thread, but it accesses GLib state (`steam_input_mode`) and calls `send_notification()`. This is safe because:
+1. The callback runs synchronously on the ATT thread before returning
+2. `send_notification()` only reads shared state (`_notification_handles`, `mtu`) and sends on the socket
+3. GLib main loop notifications are queued and processed on the next iteration
+
 ### Report Map
 
 The HID Report Map descriptor defines the input report format. For a gamepad:
@@ -286,6 +324,59 @@ Report Map is 282 bytes, exceeding the default MTU of 23. The host sends:
 2. Server responds with data starting at offset 0
 3. Host sends `Read Blob Request` with offset = previous response length
 4. Repeat until all data is read
+
+## Feature Report Protocol
+
+The SC2 Feature Report system uses a **write-then-read** pattern that is not standard BLE HID. The host writes a command to a Feature Report, then reads the same Feature Report to get the response.
+
+### The Flow
+
+```
+Host → Device:  ATT Write Request to FR 0x00 (command payload)
+                Server stores response in _pending_fr_response[0x00]
+
+Host ← Device:  ATT Write Response (ack)
+
+Host → Device:  ATT Read Request to FR 0x00
+                Server returns _pending_fr_response[0x00]
+
+Host ← Device:  ATT Read Response (command response)
+```
+
+### Two Response Mechanisms
+
+The server maintains two separate response sources for Feature Report reads:
+
+1. **`_fr_response_queue`** (`main_l2cap.py:254`) — Pre-populated with zero-byte responses during `_prepopulate_responses()`. Used for the initial GATT discovery reads that BlueZ's hog-lib sends before any Steam commands arrive. These reads happen during connection setup and must return valid (but empty) data.
+
+2. **`_pending_fr_response`** (`main_l2cap.py:214`) — Dict of actual command responses, keyed by report_id. Set by `_handle_sc2_command()` after processing a command. Checked first during `_on_feature_report_read()`; if empty, falls back to the queue.
+
+The read handler priority: `_pending_fr_response` → `_fr_response_queue` → `b'\x00' * 64` (zero fallback).
+
+### Lifecycle
+
+```
+Connection opens
+  → _prepopulate_responses() fills _fr_response_queue with zeros
+  → _pending_fr_response is cleared
+
+Host discovers GATT (reads FR 0x00/0x01)
+  → _on_feature_report_read() returns from queue (zeros)
+
+Steam sends SC2 command (writes FR 0x00)
+  → _handle_sc2_command() processes command
+  → Stores response in _pending_fr_response[0x00]
+
+Steam reads FR 0x00 for response
+  → _on_feature_report_read() returns from _pending_fr_response
+```
+
+### Key Behavior Notes
+
+- If Steam writes a new command before reading the previous response, the old response is overwritten
+- If a read arrives before any write, the queue provides valid zeros (not an error)
+- The `_pending_fr_response` dict is cleared on disconnect (`_on_att_connection`)
+- Feature Report reads for report IDs other than 0x00/0x01 go through `_proxy_feature_read()` (Neptune proxy) if the hidraw fd is open
 
 ## Socket Setup
 

@@ -528,10 +528,14 @@ class InputHandler:
                     from input_handler import find_neptune_hidraw
                     dev_path = find_neptune_hidraw()
                     if dev_path:
+                        # BUG: Initial open at line 429 uses O_RDWR, but reopen uses O_RDONLY.
+                        # After reopen, write operations (lizard-off, haptics) will fail silently.
                         self._neptune_fd = os.open(dev_path, os.O_RDONLY | os.O_NONBLOCK)
                         self.device_path = dev_path
                         print(f"[input] Neptune device reopened: {dev_path}")
                         last_lizard_off = time.monotonic()
+                        # Retry counter resets on successful reopen — the 10-retry limit only applies
+                        # to consecutive failures. A single successful reopen allows 10 more retries.
                         retry_count = 0  # Reset on successful reopen
                     else:
                         print(f"[-] Neptune device not found, retrying in 5s...")

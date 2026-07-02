@@ -25,6 +25,8 @@ _PROTO_LOG = os.environ.get('SPOOFDECK_PROTO_LOG', '') == '1'
 
 def _proto_log(event, **kwargs):
     """Emit a structured JSON log line to stderr when SPOOFDECK_PROTO_LOG=1."""
+    # NOTE: This function is duplicated in main_l2cap.py. Both must be kept in sync.
+    # A shared module was considered but rejected to avoid deployment changes.
     if not _PROTO_LOG:
         return
     entry = {"ts": round(time.monotonic(), 3), "event": event}
@@ -36,17 +38,16 @@ def _proto_log(event, **kwargs):
 
 
 # SC2 command byte → human name (for structured logging)
+# Keep in sync with main_l2cap.py _SC2_CMD_NAMES
 _SC2_CMD_NAMES = {
-    0x81: "CLEAR_DIGITAL_MAPPINGS",
-    0x83: "GET_ATTRIBUTES",
-    0x85: "SET_DEFAULT_DIGITAL_MAPPINGS",
-    0x87: "SET_SETTINGS_VALUES",
-    0x89: "GET_SETTINGS_VALUES",
-    0x8C: "GET_SETTINGS_DEFAULTS",
-    0x8D: "SET_CONTROLLER_MODE",
-    0xAE: "GET_SERIAL",
-    0xBA: "GET_CHIP_ID",
-    0xF2: "CAPABILITY_QUERY_UNKNOWN",
+    0x81: "CLEAR_DIGITAL_MAPPINGS", 0x82: "GET_DIGITAL_MAPPINGS",
+    0x83: "GET_ATTRIBUTES", 0x85: "SET_DEFAULT_DIGITAL_MAPPINGS",
+    0x87: "SET_SETTINGS_VALUES", 0x89: "GET_SETTINGS_VALUES",
+    0x8C: "GET_SETTINGS_DEFAULTS", 0x8D: "SET_CONTROLLER_MODE",
+    0xAE: "GET_SERIAL", 0xB4: "PROTOCOL_VERSION",
+    0xB5: "PROTOCOL_COMMAND", 0xBA: "GET_CHIP_ID",
+    0xEE: "FEATURE_REPORT_WRITE", 0xEF: "FEATURE_REPORT_READ",
+    0x95: "ENTER_BOOTLOADER", 0xF2: "MAPPING_ACK",
 }
 
 from gatt_db import (
@@ -645,6 +646,10 @@ class AttServer:
         self.notification_count += 1
         self._diag_notif_sent[handle] += 1
         
+        # Throttle logging: gamepad (len > 8) logged every 100th notification to avoid
+        # flooding at 1000Hz polling rate. Mouse/keyboard logged every time.
+        # notification_count is GLOBAL (not per-handle), so throttle timing depends on
+        # which handles are active.
         # Log mouse/keyboard (len <= 8) immediately, and gamepad (len > 8) throttled
         if len(value) <= 8 or (self.notification_count % 100 == 0):
             print(f"[att] Notification sent: handle=0x{handle:04x} len={len(value)} value={value.hex()}")
@@ -719,4 +724,6 @@ class AttServer:
 
     @property
     def connected(self):
+        # Technically racy with _pdu_loop cleanup (self.conn = None), but safe because
+        # _send() catches socket exceptions. Callers should not assume connected == stable.
         return self.conn is not None

@@ -144,7 +144,7 @@ After the init chain stall is resolved, the gate at `[esi+0x17c]` may still bloc
 These are correctness improvements, not blockers. Fix one at a time, test between each.
 
 1. **Command 0x85/0x8D routing swap** — `main_l2cap.py:556-564` has 0x85 and 0x8D swapped
-2. **Write Command (0x52) doesn't process CCCD writes** — `att_server.py:445-454`
+2. **~~Write Command (0x52) doesn't process CCCD writes~~** **RESOLVED**: Write Command now processes CCCDs (`att_server.py:571-584`).
 3. **Read/Write don't check attribute permissions** — `att_server.py:350-443`
 4. **Diagnostic handle labels are wrong** — `att_server.py:504-510, 525-531`
 5. **Read Blob uses wrong error code** — `att_server.py:379` (0x01 → 0x07)

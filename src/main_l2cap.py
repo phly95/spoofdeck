@@ -89,7 +89,10 @@ class HoGPeripheral:
         self._mouse_report_handle = None
         self._keyboard_report_handle = None
         self._sc2_report_handle = None
+        # Not reset on disconnect — matches real SC2 behavior where mode persists across connections.
         self.steam_input_mode = False
+        # Settings persist across connections (matches real SC2 behavior — settings stored in flash).
+        # Intentionally NOT cleared on disconnect.
         self._settings_store = {}  # register_index -> value (for GET_SETTINGS_VALUES)
 
     def setup(self, local_name="Steam Controller 2026"):
@@ -138,26 +141,6 @@ class HoGPeripheral:
         self.att_server._on_disconnection = self._on_att_disconnection
         self.att_server._on_cccd_enabled = self._on_cccd_enabled
 
-    def _find_report_handle(self):
-        """Find the handle of the Report characteristic for input notifications."""
-        for handle, attr in self.gatt_db.attributes.items():
-            # Report characteristic UUID is 0x2A4D
-            if attr.uuid == b'\x4d\x2a':  # Little-endian UUID16
-                # Check if it has NOTIFY property (0x10)
-                if attr.properties & 0x10:
-                    self._report_handle = handle
-                    return
-        # Fallback: look for the characteristic declaration
-        for handle, attr in self.gatt_db.attributes.items():
-            if attr.uuid == b'\x03\x28':  # Characteristic declaration UUID
-                if len(attr.value) >= 5:
-                    char_uuid = attr.value[3:5]
-                    props = attr.value[0]
-                    if char_uuid == b'\x4d\x2a' and props & 0x10:
-                        val_handle = attr.value[1] | (attr.value[2] << 8)
-                        self._report_handle = val_handle
-                        return
-
     def _find_sc2_report_handle(self):
         """Find the handle of the SC2 custom characteristic for input notifications."""
         from gatt_db import SC2_INPUT_CH1_UUID, uuid_to_bytes
@@ -201,6 +184,10 @@ class HoGPeripheral:
     # SC2 command IDs (sent via Feature Report 0x00)
     SC2_CMD_CLEAR_MAPPINGS         = 0x81
     SC2_CMD_GET_ATTRIBUTES         = 0x83
+    # NOTE: 0x85 is BOTH a Feature Report ID (Mode Switch, handled by _on_feature_report_write)
+    # AND a command byte (SET_DEFAULT_DIGITAL_MAPPINGS, handled by _handle_sc2_command).
+    # These are different namespaces — FR IDs are in the HID descriptor, command bytes are
+    # in the Feature Report payload. The handler dispatches based on context (FR write vs command).
     SC2_CMD_SET_DEFAULT_MAPPINGS   = 0x85
     SC2_CMD_SET_ATTRIBUTES         = 0x87
     SC2_CMD_GET_SETTINGS_VALUES    = 0x89
@@ -291,7 +278,8 @@ class HoGPeripheral:
             print(f"[haptic] Rumble (Stripped Report ID): left={left_speed} right={right_speed}")
             self._forward_haptic_to_neptune(left_speed, right_speed)
         else:
-            # Unknown output report — forward raw to Neptune
+            # Forward unknown output reports to Neptune verbatim.
+            # This is a catch-all — could forward unintended calibration/LED commands.
             print(f"[haptic] Unknown output report ID=0x{report_id:02x} len={len(value)}, forwarding raw")
             self._forward_raw_to_neptune(value)
 
@@ -501,6 +489,8 @@ class HoGPeripheral:
         elif cmd == self.SC2_CMD_GET_CHIP_ID:
             # GET_CHIP_ID (0xBA) — Return chip ID (15-byte identifier)
             # Format from InputPlumber: [0xBA, 0x11, 0x00, chip_id_15_bytes, padding]
+            # Fabricated chip ID. Real SC2 uses Nordic nRF52840, not NXP.
+            # Steam may validate this against known values — needs testing.
             chip_id = bytes([
                 0x4e, 0x58, 0x50, 0x35, 0x33, 0x37, 0x30, 0x30,
                 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36,
@@ -673,6 +663,11 @@ class HoGPeripheral:
         if self._neptune_feature_fd:
             import fcntl, array
             length = 65
+            # HIDIOCGFEATURE ioctl encoding:
+            # bits 31-30: direction = _IOC_READ (3)
+            # bits 29-16: size = length
+            # bits 15-8:  type = 'H' (72, from linux/hidraw.h HID_MAX_USAGES)
+            # bits 7-0:   number = 7 (HIDIOCGFEATURE) or 6 (HIDIOCSFEATURE)
             ioctl_num = (3 << 30) | (length << 16) | (72 << 8) | 7
             buf = array.array('B', [0] * length)
             buf[0] = report_id
@@ -758,7 +753,9 @@ class HoGPeripheral:
             names = [handle_names.get(h, f"0x{h:04x}") for h in active]
             print(f"[DIAG] 📡 Active subscriptions: {names}")
 
-        # Auto-switch to gamepad mode when host subscribes to gamepad or SC2 custom CCCDs
+        # Auto-switch to Steam Input mode. The real SC2 starts in lizard mode and switches
+        # when Steam sends an explicit command. We skip that and go directly to Steam Input
+        # because the Deck doesn't need lizard mode (it has its own input devices).
         if handle in (self._report_handle, self._sc2_report_handle):
             if not self.steam_input_mode:
                 self.steam_input_mode = True
@@ -783,7 +780,10 @@ class HoGPeripheral:
         self._schedule_adv_refresh()
 
     def _schedule_adv_refresh(self):
-        """Re-register advertisement after a disconnect."""
+        """Re-register advertisement after a disconnect using GLib.idle_add to ensure
+        it runs on the main loop. No retry if registration fails — if BlueZ is
+        restarting, the device stops advertising until manually restarted."""
+
         def _refresh():
             try:
                 obj = self.bus.get_object(BLUEZ_SERVICE_NAME, self.adapter_path)
@@ -898,6 +898,9 @@ class HoGPeripheral:
                     name = f.read().strip()
                 with open(phys_path) as f:
                     phys = f.read().strip()
+                # Only grab mouse (input0) and keyboard (input1) — NOT vendor HID (input2/hidraw3).
+                # The vendor HID is read directly via hidraw for gamepad input.
+                # If this filter changes, verify that hidraw3 read path still works.
                 if 'Valve' in name and ('/input0' in phys or '/input1' in phys):
                     fd = os.open(evpath, os.O_RDONLY | os.O_NONBLOCK)
                     fcntl.ioctl(fd, self._EVIOCGRAB, 1)
