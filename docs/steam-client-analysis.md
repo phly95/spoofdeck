@@ -7,9 +7,9 @@
 ├── steamclient.so          (47.7 MB)
 ├── config/
 │   └── chord_triton.vdf
-├── firmware/
-│   ├── IBEX_FW_6941BF08.fw
-│   ├── PROTEUS_FW_6941BF87.fw
+├── bin/hardwareupdater/
+│   ├── IBEX_FW_6A3F2424.fw
+│   ├── PROTEUS_FW_6A3F2420.fw
 │   └── hardwareupdater.cfg
 ├── resource/
 │   └── blefirmwareupdate.png
@@ -47,25 +47,25 @@ The SC2 is treated as a `controller_neptune` by Steam Client.
 
 ## Firmware Files
 
-### IBEX_FW_6941BF08.fw (367 KB)
+### IBEX_FW_6A3F2424.fw (350 KB)
 
 - **Target**: Triton/SC2 BLE controller
-- **Timestamp**: 0x6941BF08 (Unix timestamp)
-- **Size**: 367 KB
+- **Timestamp**: 0x6A3F2424 (Unix timestamp)
+- **Size**: 350 KB
 - **Purpose**: BLE firmware update for the SC2
 
-### PROTEUS_FW_6941BF87.fw (185 KB)
+### PROTEUS_FW_6A3F2420.fw (197 KB)
 
 - **Target**: Puck (USB dongle)
-- **Timestamp**: 0x6941BF87 (Unix timestamp)
-- **Size**: 185 KB
+- **Timestamp**: 0x6A3F2420 (Unix timestamp)
+- **Size**: 197 KB
 - **Purpose**: Firmware update for the USB dongle
 
 ### hardwareupdater.cfg
 
 ```
-TRITON_FW_TS:6941BF08
-PROTEUS_FW_TS:6941BF87
+TRITON_FW_TS:6A3F2424
+PROTEUS_FW_TS:6A3F2420
 ```
 
 Firmware timestamps used for version checking during update.

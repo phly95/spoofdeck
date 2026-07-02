@@ -148,6 +148,6 @@ The 16 advertising instances allow multiple concurrent advertisements, though we
 
 3. **BLE peripheral mode is supported** — the Qualcomm QCA adapter supports advertising, which is critical for our GATT server.
 
-4. **Firmware files are installed at `~/.steam/steam/firmware/`** — see `docs/steam-client-analysis.md` for details.
+4. **Firmware files are installed at `~/.steam/steam/bin/hardwareupdater/`** — see `docs/steam-client-analysis.md` for details.
 
 5. **The vendor HID interface (hidraw3) is the key** — this is where raw Steam Controller communication happens.
