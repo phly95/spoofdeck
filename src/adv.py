@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-BLE Advertisement for CJohnson Controller 2026 Spoof.
+BLE Advertisement for Steam Controller 2026 Spoof.
 
 LEAdvertisement1 D-Bus object for BlueZ registration.
 Adapter property setup for discoverable advertising fallback.

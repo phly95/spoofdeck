@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-BlueZ Agent1 D-Bus interface for CJohnson Controller 2026 BLE Spoof.
+BlueZ Agent1 D-Bus interface for Steam Controller 2026 BLE Spoof.
 
 Implements org.bluez.Agent1 on the Deck (peripheral side) so that when the
 host PC initiates pairing, BlueZ has an agent that auto-responds to all

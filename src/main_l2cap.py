@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Main entrypoint for CJohnson Controller 2026 BLE Spoof.
+Main entrypoint for Steam Controller 2026 BLE Spoof.
 
 Uses a raw L2CAP ATT server to bypass BlueZ's GATT server bug.
 BlueZ is still used for:
@@ -67,7 +67,7 @@ REPORT_CH_HANDLE = None  # Computed after database is built
 
 class HoGPeripheral:
     """
-    HID over GATT Peripheral for CJohnson Controller 2026 BLE Spoof.
+    HID over GATT Peripheral for Steam Controller 2026 BLE Spoof.
 
     Architecture:
       - BlueZ handles advertising + SMP pairing
@@ -969,7 +969,7 @@ class HoGPeripheral:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="CJohnson Controller 2026 BLE Spoof (Raw L2CAP ATT)"
+        description="Steam Controller 2026 BLE Spoof (Raw L2CAP ATT)"
     )
     parser.add_argument(
         "--adapter",
