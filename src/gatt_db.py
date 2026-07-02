@@ -552,7 +552,7 @@ def build_sc2_database(device_name="Steam Controller 2026"):
 
     # Device Information Service (0x180A)
     db.add_service(SVC_DEVICE_INFO, [
-        (CHR_MANUFACTURER_NAME, ATT_PROP_READ, b'Valve Software'),
+        (CHR_MANUFACTURER_NAME, ATT_PROP_READ, b'Wheatley\'s Counterfeits'),
         (CHR_MODEL_NUMBER, ATT_PROP_READ, b'Steam Controller 2026'),
         (CHR_SERIAL_NUMBER, ATT_PROP_READ, b'123456789ABCDEF'),
         (CHR_FIRMWARE_REVISION, ATT_PROP_READ, b'1.0.0'),
