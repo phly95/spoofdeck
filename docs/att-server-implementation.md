@@ -15,7 +15,7 @@ Host sends ATT PDU → Kernel L2CAP → Our raw socket (CID 4) → _handle_pdu()
 | Opcode | Name | Status | Handler |
 |--------|------|--------|---------|
 | 0x01 | Error Response | ✅ | `_send_error()` |
-| 0x02/0x03 | Exchange MTU | ✅ | `_handle_mtu_req()` |
+| 0x02/0x03 | Exchange MTU | ✅ | `_handle_mtu_req()` — server MTU=517, negotiated=min(client, 517) |
 | 0x04/0x05 | Find Information | ✅ | `_handle_find_info()` |
 | 0x08/0x09 | Read By Type | ✅ | `_handle_read_by_type()` |
 | 0x0A/0x0B | Read Request | ✅ | `_handle_read()` |
@@ -23,7 +23,8 @@ Host sends ATT PDU → Kernel L2CAP → Our raw socket (CID 4) → _handle_pdu()
 | 0x10/0x11 | Read By Group Type | ✅ | `_handle_read_by_group_type()` |
 | 0x12/0x13 | Write Request | ✅ | `_handle_write()` |
 | 0x1B | Handle Value Notification | ✅ | `send_notification()` |
-| 0x1D/0x1E | Handle Value Indication | ❌ | Not implemented |
+| 0x1D | Handle Value Indication | — | Not sent (but could be added) |
+| 0x1E | Handle Value Confirmation | ✅ | `_handle_pdu()` — no-op (client confirms our indication) |
 | 0x52 | Write Command | ✅ | `_handle_write_cmd()` |
 
 ## GATT Database Structure
@@ -32,82 +33,93 @@ Host sends ATT PDU → Kernel L2CAP → Our raw socket (CID 4) → _handle_pdu()
 
 | Handle | UUID | Description |
 |--------|------|-------------|
-| 0x0001 | 0x2800 | GAP Service Declaration |
-| 0x0002 | 0x2803 | Device Name Characteristic |
-| 0x0003 | 0x2A00 | Device Name Value |
-| 0x0004 | 0x2803 | Appearance Characteristic |
-| 0x0005 | 0x2A01 | Appearance Value |
-| 0x0006 | 0x2800 | GATT Service Declaration |
-| 0x0007 | 0x2803 | Service Changed Characteristic |
-| 0x0008 | 0x2A05 | Service Changed Value |
-| 0x0009 | 0x2902 | Service Changed CCCD |
-| 0x000A | 0x2800 | HID Service Declaration |
-| 0x000B | 0x2803 | HID Information Characteristic |
-| 0x000C | 0x2A4A | HID Information Value |
-| 0x000D | 0x2803 | Protocol Mode Characteristic |
-| 0x000E | 0x2A4E | Protocol Mode Value (0x01 = Report Protocol) |
-| 0x000F | 0x2803 | Report Map Characteristic |
-| 0x0010 | 0x2A4B | Report Map Value (~230 bytes: Gamepad, Mouse, Keyboard, SC2 Custom 0x45/0x47, Haptic 0x80, Feature Reports 0x00/0x01/0x85) |
-| 0x0011 | 0x2803 | HID Control Point Characteristic |
-| 0x0012 | 0x2A4C | HID Control Point Value |
-| 0x0013 | 0x2803 | Report (Gamepad Input) Characteristic |
-| 0x0014 | 0x2A4D | Report (Gamepad Input) Value (12 bytes) |
-| 0x0015 | 0x2908 | Report Reference (Gamepad Input, ID=1) |
-| 0x0016 | 0x2902 | Report (Gamepad Input) CCCD |
-| 0x0017 | 0x2803 | Report (Output) Characteristic |
-| 0x0018 | 0x2A4D | Report (Output) Value (1 byte) |
-| 0x0019 | 0x2908 | Report Reference (Output, ID=2) |
-| 0x001A | 0x2803 | Report (Mouse Input) Characteristic |
-| 0x001B | 0x2A4D | Report (Mouse Input) Value (4 bytes) |
-| 0x001C | 0x2908 | Report Reference (Mouse Input, ID=3) |
-| 0x001D | 0x2902 | Report (Mouse Input) CCCD |
-| 0x001E | 0x2803 | Report (Keyboard Input) Characteristic |
-| 0x001F | 0x2A4D | Report (Keyboard Input) Value (8 bytes) |
-| 0x0020 | 0x2908 | Report Reference (Keyboard Input, ID=4) |
-| 0x0021 | 0x2902 | Report (Keyboard Input) CCCD |
-| 0x0022 | 0x2803 | Feature Report 0x00 Characteristic |
-| 0x0023 | 0x2A4D | Feature Report 0x00 Value (64 bytes) |
-| 0x0024 | 0x2908 | Report Reference (Feature, ID=0x00) |
-| 0x0025 | 0x2803 | Feature Report 0x01 Characteristic |
-| 0x0026 | 0x2A4D | Feature Report 0x01 Value (64 bytes) |
-| 0x0027 | 0x2908 | Report Reference (Feature, ID=0x01) |
-| 0x0028 | 0x2803 | Feature Report 0x85 Characteristic |
-| 0x0029 | 0x2A4D | Feature Report 0x85 Value (64 bytes) |
-| 0x0028 | 0x2908 | Report Reference (Feature, ID=0x85) |
-| 0x0029 | 0x2803 | Feature Report 0x86 Characteristic |
-| 0x002A | 0x2A4D | Feature Report 0x86 Value (64 bytes) |
-| 0x002B | 0x2908 | Report Reference (Feature, ID=0x86) |
-| 0x002C | 0x2803 | Feature Report 0x87 Characteristic |
-| 0x002D | 0x2A4D | Feature Report 0x87 Value (64 bytes) |
-| 0x002E | 0x2908 | Report Reference (Feature, ID=0x87) |
-| 0x002F | 0x2800 | Valve Custom SC2 HID Service Declaration |
-| 0x0030 | 0x2803 | SC2 Input CH1 Characteristic (Notify) |
-| 0x0031 | 0x2A4D | SC2 Input CH1 Value (45 bytes) |
-| 0x0032 | 0x2902 | SC2 Input CH1 CCCD |
-| 0x0033 | 0x2803 | SC2 Input CH2 Characteristic (Notify) |
-| 0x0034 | 0x2A4D | SC2 Input CH2 Value (47 bytes) |
-| 0x0035 | 0x2902 | SC2 Input CH2 CCCD |
-| 0x0036 | 0x2803 | SC2 Report CH Characteristic (Write) |
-| 0x0037 | 0x2A4D | SC2 Report CH Value (64 bytes) |
-| 0x0038 | 0x2800 | Battery Service Declaration |
-| 0x0039 | 0x2803 | Battery Level Characteristic |
-| 0x003A | 0x2A19 | Battery Level Value (1 byte) |
-| 0x003B | 0x2902 | Battery Level CCCD |
-| 0x003C | 0x2800 | Device Info Service Declaration |
-| 0x003D | 0x2803 | Manufacturer Name Characteristic |
-| 0x003E | 0x2A29 | Manufacturer Name Value |
-| 0x003F | 0x2803 | Model Number Characteristic |
-| 0x0040 | 0x2A24 | Model Number Value |
-| 0x0041 | 0x2803 | Serial Number Characteristic |
-| 0x0042 | 0x2A25 | Serial Number Value |
-| 0x0043 | 0x2803 | Firmware Revision Characteristic |
-| 0x0044 | 0x2A26 | Firmware Revision Value |
-| 0x0045 | 0x2803 | Hardware Revision Characteristic |
-| 0x0046 | 0x2A27 | Hardware Revision Value |
-| 0x0047 | 0x2803 | Software Revision Characteristic |
-| 0x0048 | 0x2A28 | Software Revision Value |
-| 0x0049 | 0x2803 | PnP ID Characteristic |
-| 0x004A | 0x2A50 | PnP ID Value (7 bytes, Source=0x02, VID=0x28DE, PID=0x1303) |
+| 0x0001 | 0x2800 (Primary Service) | GAP Service Declaration |
+| 0x0002 | 0x2803 (Characteristic) | Characteristic Decl (val=0x0003) |
+| 0x0003 | 0x2A00 (Device Name) | Device Name Value |
+| 0x0004 | 0x2803 (Characteristic) | Characteristic Decl (val=0x0005) |
+| 0x0005 | 0x2A01 (Appearance) | Appearance Value |
+| 0x0006 | 0x2800 (Primary Service) | GATT Service Declaration |
+| 0x0007 | 0x2803 (Characteristic) | Characteristic Decl (val=0x0008) |
+| 0x0008 | 0x2A05 (Service Changed) | Service Changed Value |
+| 0x0009 | 0x2902 (CCCD) | CCCD |
+| 0x000A | 0x2800 (Primary Service) | HID Service Declaration |
+| 0x000B | 0x2803 (Characteristic) | Characteristic Decl (val=0x000C) |
+| 0x000C | 0x2A4A (HID Information) | HID Information Value |
+| 0x000D | 0x2803 (Characteristic) | Characteristic Decl (val=0x000E) |
+| 0x000E | 0x2A4E (Protocol Mode) | Protocol Mode Value |
+| 0x000F | 0x2803 (Characteristic) | Characteristic Decl (val=0x0010) |
+| 0x0010 | 0x2A4B (Report Map) | Report Map Value (282 bytes) |
+| 0x0011 | 0x2803 (Characteristic) | Characteristic Decl (val=0x0012) |
+| 0x0012 | 0x2A4C (HID Control Point) | HID Control Point Value |
+| 0x0013 | 0x2803 (Characteristic) | Characteristic Decl (val=0x0014) |
+| 0x0014 | 0x2A4D (Report) | Report Value (0x01, Input, 12 bytes) |
+| 0x0015 | 0x2908 (Report Reference) | Report Reference (ID=0x01, Input) |
+| 0x0016 | 0x2902 (CCCD) | CCCD |
+| 0x0017 | 0x2803 (Characteristic) | Characteristic Decl (val=0x0018) |
+| 0x0018 | 0x2A4D (Report) | Report Value (0x02, Output, 1 bytes) |
+| 0x0019 | 0x2908 (Report Reference) | Report Reference (ID=0x02, Output) |
+| 0x001A | 0x2803 (Characteristic) | Characteristic Decl (val=0x001B) |
+| 0x001B | 0x2A4D (Report) | Report Value (0x80, Output, 10 bytes) |
+| 0x001C | 0x2908 (Report Reference) | Report Reference (ID=0x80, Output) |
+| 0x001D | 0x2803 (Characteristic) | Characteristic Decl (val=0x001E) |
+| 0x001E | 0x2A4D (Report) | Report Value (0x03, Input, 4 bytes) |
+| 0x001F | 0x2908 (Report Reference) | Report Reference (ID=0x03, Input) |
+| 0x0020 | 0x2902 (CCCD) | CCCD |
+| 0x0021 | 0x2803 (Characteristic) | Characteristic Decl (val=0x0022) |
+| 0x0022 | 0x2A4D (Report) | Report Value (0x04, Input, 8 bytes) |
+| 0x0023 | 0x2908 (Report Reference) | Report Reference (ID=0x04, Input) |
+| 0x0024 | 0x2902 (CCCD) | CCCD |
+| 0x0025 | 0x2803 (Characteristic) | Characteristic Decl (val=0x0026) |
+| 0x0026 | 0x2A4D (Report) | Report Value (0x00, Feature, 64 bytes) |
+| 0x0027 | 0x2908 (Report Reference) | Report Reference (ID=0x00, Feature) |
+| 0x0028 | 0x2803 (Characteristic) | Characteristic Decl (val=0x0029) |
+| 0x0029 | 0x2A4D (Report) | Report Value (0x01, Feature, 64 bytes) |
+| 0x002A | 0x2908 (Report Reference) | Report Reference (ID=0x01, Feature) |
+| 0x002B | 0x2803 (Characteristic) | Characteristic Decl (val=0x002C) |
+| 0x002C | 0x2A4D (Report) | Report Value (0x85, Feature, 64 bytes) |
+| 0x002D | 0x2908 (Report Reference) | Report Reference (ID=0x85, Feature) |
+| 0x002E | 0x2803 (Characteristic) | Characteristic Decl (val=0x002F) |
+| 0x002F | 0x2A4D (Report) | Report Value (0x86, Feature, 64 bytes) |
+| 0x0030 | 0x2908 (Report Reference) | Report Reference (ID=0x86, Feature) |
+| 0x0031 | 0x2803 (Characteristic) | Characteristic Decl (val=0x0032) |
+| 0x0032 | 0x2A4D (Report) | Report Value (0x87, Feature, 64 bytes) |
+| 0x0033 | 0x2908 (Report Reference) | Report Reference (ID=0x87, Feature) |
+| 0x0034 | 0x2803 (Characteristic) | Characteristic Decl (val=0x0035) |
+| 0x0035 | 0x2A4D (Report) | Report Value (0x45, Input, 45 bytes) |
+| 0x0036 | 0x2908 (Report Reference) | Report Reference (ID=0x45, Input) |
+| 0x0037 | 0x2902 (CCCD) | CCCD |
+| 0x0038 | 0x2803 (Characteristic) | Characteristic Decl (val=0x0039) |
+| 0x0039 | 0x2A4D (Report) | Report Value (0x47, Input, 47 bytes) |
+| 0x003A | 0x2908 (Report Reference) | Report Reference (ID=0x47, Input) |
+| 0x003B | 0x2902 (CCCD) | CCCD |
+| 0x003C | 0x2800 (Primary Service) | Valve Custom SC2 HID Service Declaration |
+| 0x003D | 0x2803 (Characteristic) | Characteristic Decl (val=0x003E) |
+| 0x003E | 100f6c7a-1735-4313-b402-38567131e5f3 | SC2 Input CH1 Value (45 bytes) |
+| 0x003F | 0x2902 (CCCD) | CCCD |
+| 0x0040 | 0x2803 (Characteristic) | Characteristic Decl (val=0x0041) |
+| 0x0041 | 100f6c7c-1735-4313-b402-38567131e5f3 | SC2 Input CH2 Value (47 bytes) |
+| 0x0042 | 0x2902 (CCCD) | CCCD |
+| 0x0043 | 0x2803 (Characteristic) | Characteristic Decl (val=0x0044) |
+| 0x0044 | 100f6c34-1735-4313-b402-38567131e5f3 | SC2 Report CH Value (64 bytes) |
+| 0x0045 | 0x2800 (Primary Service) | Battery Service Declaration |
+| 0x0046 | 0x2803 (Characteristic) | Characteristic Decl (val=0x0047) |
+| 0x0047 | 0x2A19 (Battery Level) | Battery Level Value |
+| 0x0048 | 0x2902 (CCCD) | CCCD |
+| 0x0049 | 0x2800 (Primary Service) | Device Info Service Declaration |
+| 0x004A | 0x2803 (Characteristic) | Characteristic Decl (val=0x004B) |
+| 0x004B | 0x2A29 (Manufacturer Name) | Manufacturer Name Value |
+| 0x004C | 0x2803 (Characteristic) | Characteristic Decl (val=0x004D) |
+| 0x004D | 0x2A24 (Model Number) | Model Number Value |
+| 0x004E | 0x2803 (Characteristic) | Characteristic Decl (val=0x004F) |
+| 0x004F | 0x2A25 (Serial Number) | Serial Number Value |
+| 0x0050 | 0x2803 (Characteristic) | Characteristic Decl (val=0x0051) |
+| 0x0051 | 0x2A26 (Firmware Revision) | Firmware Revision Value |
+| 0x0052 | 0x2803 (Characteristic) | Characteristic Decl (val=0x0053) |
+| 0x0053 | 0x2A27 (Hardware Revision) | Hardware Revision Value |
+| 0x0054 | 0x2803 (Characteristic) | Characteristic Decl (val=0x0055) |
+| 0x0055 | 0x2A28 (Software Revision) | Software Revision Value |
+| 0x0056 | 0x2803 (Characteristic) | Characteristic Decl (val=0x0057) |
+| 0x0057 | 0x2A50 (PnP ID) | PnP ID Value (7 bytes: Source=0x02, VID=0x28DE, PID=0x1303) |
 
 ### Host Discovery Sequence
 
@@ -128,6 +140,8 @@ UUID: `0x2902`
 - `0x0002` = Indications enabled
 
 When the host writes `[0x01, 0x00]` to a CCCD, the server adds that handle's parent characteristic to `_notification_handles`. Subsequent `send_notification()` calls will send ATT Handle Value Notifications.
+
+CCCD state is persisted per-client in `_client_cccds` (keyed by client address). On reconnection, previously-enabled CCCDs are restored automatically (`att_server.py:140-148`), and `_on_cccd_enabled` is called for each restored handle so the application can resume sending notifications without waiting for the host to re-subscribe.
 
 ### Report Map
 
@@ -219,7 +233,7 @@ Lizard mode re-enables every ~2 seconds. Must periodically re-send disable comma
 
 ### Long Read (Read Blob)
 
-Report Map is 77 bytes, exceeding the default MTU of 23. The host sends:
+Report Map is 282 bytes, exceeding the default MTU of 23. The host sends:
 1. `Read Blob Request` with offset 0
 2. Server responds with data starting at offset 0
 3. Host sends `Read Blob Request` with offset = previous response length
@@ -251,9 +265,13 @@ def send_notification(self, handle, value):
     """Send ATT Handle Value Notification."""
     if handle not in self._notification_handles:
         return  # Notifications not enabled
-    pdu = struct.pack('<BH', 0x1B, handle) + value
+    # Cap to MTU - 3 per ATT spec (opcode + handle)
+    capped = value[:self.mtu - 3] if len(value) > self.mtu - 3 else value
+    pdu = struct.pack('<BH', 0x1B, handle) + capped
     self.conn.send(pdu)
 ```
+
+**MTU constraints**: Read Responses are capped to MTU-1. Notifications are capped to MTU-3 (opcode + handle = 3 bytes overhead). With server MTU=517, the effective payload limits are 516 bytes for reads and 514 bytes for notifications.
 
 ---
 
@@ -299,7 +317,7 @@ Handle allocation is dynamic, using 20-byte attribute entries and 8-byte UUID po
 
 ### Key Differences
 
-1. **Feature Reports in Report Map** — Feature Reports 0x00, 0x01, 0x85 are now declared in the HID Report Map as Feature collections (Logical, Vendor Defined 0xFF00). This allows Steam's SC2 HIDAPI driver to discover them during Report Map parsing.
+1. **Feature Reports in Report Map** — Feature Reports 0x00, 0x01, 0x85, 0x86, 0x87 are declared in the HID Report Map as Feature collections (Logical, Vendor Defined 0xFF00). This allows Steam's SC2 HIDAPI driver to discover them during Report Map parsing.
 
 2. **Battery/Device Info** — The firmware does NOT register these in its GATT setup. However, BlueZ's HOGP driver requires them for `/dev/hidrawN` creation. These are extra in our server but necessary for BlueZ compatibility.
 

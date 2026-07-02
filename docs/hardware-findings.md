@@ -79,20 +79,7 @@ Standard boot keyboard descriptor:
 
 ### hidraw3 — Vendor Steam Input Interface
 
-```
-Usage Page (0xFF00)        ; Vendor-defined
-Usage (0x01)               ; Vendor usage
-Collection (Application)
-  Report ID (0x00)
-  Report Size (8)
-  Report Count (64)
-  Input (Data, Var, Abs)   ; 64-byte vendor input report
-  Report ID (0x00)
-  Report Size (8)
-  Report Count (64)
-  Output (Data, Var, Abs)  ; 64-byte vendor output report
-End Collection
-```
+See `docs/sc2-protocol.md` (HID Descriptor section) for the vendor HID descriptor. The vendor interface uses Usage Page 0xFF00 with 64-byte I/O reports for raw vendor communication (firmware updates, feature reports).
 
 ## Raw HID Data (hidraw3)
 
@@ -161,6 +148,6 @@ The 16 advertising instances allow multiple concurrent advertisements, though we
 
 3. **BLE peripheral mode is supported** — the Qualcomm QCA adapter supports advertising, which is critical for our GATT server.
 
-4. **No firmware files in the Steam installation** — firmware is managed separately by the system updater.
+4. **Firmware files are installed at `~/.steam/steam/firmware/`** — see `docs/steam-client-analysis.md` for details.
 
 5. **The vendor HID interface (hidraw3) is the key** — this is where raw Steam Controller communication happens.

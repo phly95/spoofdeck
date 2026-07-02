@@ -81,7 +81,6 @@ Firmware timestamps used for version checking during update.
 | `CExitLizardModeWorkItem` | Work item to exit lizard mode |
 | `device_send_feature_report` | Send HID feature report to device |
 | `device_get_serial_number_string` | Get device serial number |
-| `toggle_lizard` | Lizard mode toggle command |
 
 ### Subsystems Identified
 
@@ -133,25 +132,34 @@ KERNEL=="hidraw*", ATTRS{../idVendor}=="28de", RUN+="/bin/sh -c 'echo 1 > /sys$d
 4. **Device Info**: VID 0x28DE, PID 0x1303, "Valve Software"
 5. **Lizard Mode**: Start in lizard mode, switch on Steam Client request
 
+### What Steam Client Expects
+
+- Standard HID Service (0x1812) — required by BlueZ hog-ll driver
+- Valve Custom Service with Input/Report characteristics
+- HID Report Map with SC2-specific report descriptors
+- Notifications on the correct handles after CCCD writes
+- Feature Report writes for mode switching and configuration
+
 ### What Steam Client Does NOT Expect
 
-- HID report descriptors (handled internally by Steam)
-- Standard HID service UUID (uses Valve custom UUID)
-- Standard USB HID protocol (custom BLE protocol)
-- Any specific MAC address (pairing-based)
+- A specific MAC address (pairing-based)
+- Standard USB HID protocol (uses custom BLE protocol)
 
 ## Testing with Steam Client
 
-To test the SC2 spoof with Steam Client:
+The project uses a raw L2CAP ATT server (not a D-Bus GATT server). To test the SC2 spoof with Steam Client:
 
-1. Start GATT server on Deck
-2. Open Steam on host PC
-3. Go to Settings → Controller
-4. The device should appear as "Steam Controller 2026"
-5. Input should be recognized in the controller test
+1. Deploy and start the ATT server on Deck (`scripts/deploy.sh`)
+2. On the host, connect via `bluetoothctl connect C2:12:34:56:78:9A` (NOT pair — pair tries BR/EDR which tears down LE)
+3. Open Steam on host PC
+4. Go to Settings → Controller
+5. The device should appear as "Steam Controller 2026"
+6. Input should be recognized in the controller test
+
+See `AGENTS.md` "How to Run" section for the full connection procedure.
 
 If the device does not appear:
 - Check BLE advertisement is active
-- Verify GATT service is registered
-- Check Steam Client logs for connection attempts
+- Verify ATT server is running and accepting connections
+- Check Steam Client logs (`controller.txt`) for connection attempts
 - Verify input report format matches SC2 specification

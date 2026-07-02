@@ -10,7 +10,7 @@
 
 - **Manufacturer**: Valve Software
 - **Vendor ID**: 0x28DE (Valve)
-- **PnP ID PID**: 0x0003
+- **PnP ID PID**: 0x1303
 
 ## GATT Services
 
@@ -23,6 +23,8 @@ The real SC2 firmware (nRF52840, Zephyr RTOS) registers GATT services as follows
 - **Battery (0x180F)** and **Device Info (0x180A)** — **NOT found in firmware GATT registration**. Storage keys exist for DIS values (`bt/dis/model`), but no GATT registration code. These may be registered elsewhere or not present in SC2 BLE mode.
 
 **Note**: Our spoofing server exposes Battery and Device Info because BlueZ's HOGP driver requires them for `/dev/hidrawN` creation. The real SC2 may not have them — this is an area for further testing.
+
+For the complete handle layout (87 attributes, 6 services) with all UUIDs and handle numbers, see `docs/att-server-implementation.md`.
 
 ### Valve Custom Service
 
@@ -46,40 +48,64 @@ This is a Valve custom UUID service. Steam reads from these characteristics dire
 hog-ll adds it from the Report Reference descriptor. The notification data is exactly
 45 bytes starting at offset 0 = sequence number.
 
-**Format verified against Steam client binary RE and SDL3 source code.**
+**Format verified against SDL3 `TritonMTUNoQuat_t` struct in `input_handler.py:263-284`.**
 
 ```
-Offset  Size  Description
-0       1     Sequence number (incrementing by 0x32 per report)
-1       4     Button state (32-bit bitmask, little-endian)
-5       1     Left trigger (0-255)
-6       1     Right trigger (0-255)
-7       2     Left stick X (signed 16-bit LE, ~1050 at center)
-9       2     Left stick Y (signed 16-bit LE, ~-1900 at center)
-11      2     Right stick X (signed 16-bit LE, ~450 at center)
-13      2     Right stick Y (signed 16-bit LE, ~1250 at center)
-15      2     Left trackpad X (signed 16-bit LE)
-17      2     Left trackpad Y (signed 16-bit LE)
-19      2     Right trackpad X (signed 16-bit LE)
-21      2     Right trackpad Y (signed 16-bit LE)
-23      2     IMU accelerometer X (signed 16-bit LE)
-25      2     IMU accelerometer Y (signed 16-bit LE)
-27      2     IMU accelerometer Z (signed 16-bit LE, ~16400 = 1g)
-29      2     IMU gyroscope X (signed 16-bit LE)
-31      2     IMU gyroscope Y (signed 16-bit LE)
-33      2     IMU gyroscope Z (signed 16-bit LE)
-35      4     IMU timestamp (32-bit LE, microseconds)
-39      6     Reserved (quaternion W/X/Y — zeros in 45-byte report)
+Offset  Size  Field                   Type
+0       1     seq_num                 uint8
+1       4     buttons                 uint32 LE
+5       2     sTriggerLeft            int16 LE (0-32767)
+7       2     sTriggerRight           int16 LE (0-32767)
+9       2     sLeftStickX             int16 LE
+11      2     sLeftStickY             int16 LE
+13      2     sRightStickX            int16 LE
+15      2     sRightStickY            int16 LE
+17      2     sLeftPadX               int16 LE
+19      2     sLeftPadY               int16 LE
+21      2     unPressureLeft          uint16 LE
+23      2     sRightPadX              int16 LE
+25      2     sRightPadY              int16 LE
+27      2     unPressureRight         uint16 LE
+29      4     timestamp               uint32 LE (microseconds)
+33      2     accel_x                 int16 LE
+35      2     accel_y                 int16 LE
+37      2     accel_z                 int16 LE
+39      2     gyro_x                  int16 LE
+41      2     gyro_y                  int16 LE
+43      2     gyro_z                  int16 LE
+                          Total: 45 bytes
 ```
 
-**Total: 45 bytes**
-
-Note: The 45-byte report does NOT include quaternion Z or full quaternion data.
-The full 48-byte format (with Report ID + quaternion) is used over USB (Report 0x42).
+Note: Triggers are 16-bit (0-32767), NOT 8-bit. The `unPressureLeft/Right` fields
+are trackpad capacitive pressure values (unsigned). The 45-byte report does NOT
+include quaternion data — the full 48-byte format (with Report ID + quaternion) is
+used over USB (Report 0x42).
 
 ### Report 0x47 (47 bytes) — Extended Input
 
 Same as 0x45 but adds 16-bit trackpad timestamp fields.
+
+### Report 0x80 (9 bytes) — Haptic Output
+
+**Format from `gatt_db.py:412-420` and `main_l2cap.py:267-292`.**
+
+```
+Offset  Size  Description
+0       1     Type (0x80)
+1       2     Intensity (uint16 LE)
+3       2     Left motor speed (uint16 LE)
+5       1     Left gain (int8)
+6       2     Right motor speed (uint16 LE)
+8       1     Right gain (int8)
+```
+
+This report is received via ATT Write Request (0x12) on the CHR_REPORT handle in
+the HID Service. The hog-ll driver strips the Report ID prefix before delivering
+to userspace — `_on_haptic_write()` receives the 9-byte payload without the 0x80
+prefix. When the Report ID is present (10 bytes), it is parsed at `value[0]`.
+
+The haptic rumble is forwarded to the Neptune controller as a `PackedRumbleReport`
+(64-byte output report starting with `0xeb 0x09`).
 
 ### Report 0x42 (53 bytes) — USB Input
 
@@ -141,6 +167,23 @@ End Collection
 ```
 
 The vendor HID interface uses Usage Page 0xFF00 with 64-byte I/O reports. This is used for raw vendor communication (firmware updates, feature reports).
+
+### SC2 BLE Report Map Summary
+
+**From `gatt_db.py:290-452`.** The SC2 BLE Report Map contains:
+
+| Report ID | Type | Size | Description |
+|-----------|------|------|-------------|
+| 0x01 | Input | 12 bytes | Gamepad (16 buttons + 4 × 16-bit axes + 2 × 8-bit triggers) |
+| 0x02 | Output | 1 byte | Gamepad output (exists for hog-ll num_reports > 1) |
+| 0x03 | Input | 4 bytes | Mouse (5 buttons + X + Y + Wheel, all 8-bit) |
+| 0x04 | Input | 8 bytes | Keyboard (1 modifier + 1 reserved + 6 keycodes, all 8-bit) |
+| 0x45 | Input | 45 bytes | SC2 Custom Input (see TritonMTUNoQuat_t above) |
+| 0x47 | Input | 47 bytes | SC2 Custom Extended Input |
+| 0x80 | Output | 9 bytes | Haptic Rumble Output (see Report 0x80 above) |
+| 0x00 | Feature | 64 bytes | SC2 Command Channel (commands + responses) |
+| 0x01 | Feature | 64 bytes | SC2 Capabilities |
+| 0x85 | Feature | 64 bytes | SC2 Mode Switch (Lizard ↔ Steam Input) |
 
 ## Mode Switching
 
@@ -205,7 +248,12 @@ The firmware's main command dispatch (`FUN_000383c4` at `0x000383c4`) uses a jum
 | 0x9F | ID_TURN_OFF_CONTROLLER | Host→Device | Turn off controller | Yes |
 | 0xA1 | ID_GET_DEVICE_INFO | Host→Device | Get device info | Yes |
 | 0xBA | ID_GET_CHIP_ID | Bidirectional | Get chip ID | Yes |
-| 0xF2 | CAPABILITY_QUERY_UNKNOWN | Bidirectional | Per-category capability query | Yes |
+| 0xB4 | PROTOCOL_VERSION | Host→Device | Protocol version query | Yes |
+| 0xB5 | PROTOCOL_COMMAND | Host→Device | Protocol command (generic ack) | Yes |
+| 0xEE | FR_MSG_WRITE | Host→Device | Feature report message write | Yes |
+| 0xEF | FR_MSG_READ | Host→Device | Feature report message read | Yes |
+| 0x95 | ENTER_BOOTLOADER | Host→Device | Enter bootloader (ack, no reboot) | Yes |
+| 0xF2 | MAPPING_ACK | Bidirectional | Mapping ACK — minimal 6-byte response after 0xe7 commands | Yes |
 
 ### Additional Commands in Firmware (not in steamclient.so RE)
 
@@ -262,15 +310,18 @@ The response contains 9 attributes, each as 1-byte tag + 4-byte LE uint32 value:
 
 ### Capabilities Bitmask (0x4169bfff)
 
+The value 0x4169bfff is a 32-bit bitmask (bits 0–31 only).
+
 ```
 Bit 0-9:   Buttons (A, B, X, Y, QAM, R3, View, R4, R5, R)
 Bit 10-19: Triggers, D-Pad, Menu, L3, Steam, L4, L5, L
 Bit 20-25: Joystick touch, Trackpad touch/click
 Bit 26-29: Trigger clicks, Grip touch
 Bit 30-31: IMU
-Bit 37:    Haptics
-Bit 39:    Dual trackpads
 ```
+
+The specific bit meanings should be verified against the firmware — the above is
+based on the button bitmask layout and capabilities reported by the real device.
 
 ## Pairing
 
