@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-BLE Advertisement for Steam Controller 2026 Spoof.
+BLE Advertisement for CJohnson Controller 2026 Spoof.
 
 LEAdvertisement1 D-Bus object for BlueZ registration.
 Adapter property setup for discoverable advertising fallback.
@@ -70,7 +70,7 @@ def setup_adapter_properties(bus, adapter_name="hci0"):
         obj = bus.get_object(BLUEZ_SERVICE_NAME, adapter_path)
         props = dbus.Interface(obj, DBUS_PROPERTIES_IFACE)
 
-        props.Set(ADAPTER_IFACE, "Alias", dbus.String("Steam Controller 2026", variant_level=1))
+        props.Set(ADAPTER_IFACE, "Alias", dbus.String("CJohnson Controller 2026", variant_level=1))
         props.Set(ADAPTER_IFACE, "Discoverable", dbus.Boolean(True, variant_level=1))
         props.Set(ADAPTER_IFACE, "Connectable", dbus.Boolean(True, variant_level=1))
         print("[+] Adapter configured: Alias, Discoverable, Connectable")

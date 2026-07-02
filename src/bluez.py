@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-BlueZ D-Bus helpers for Steam Controller 2026 BLE Spoof.
+BlueZ D-Bus helpers for CJohnson Controller 2026 BLE Spoof.
 
 Provides functions to interact with BlueZ via D-Bus for
 adapter configuration, GATT registration, and advertisement management.
