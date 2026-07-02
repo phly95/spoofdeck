@@ -252,8 +252,8 @@ Ghidra analysis of SC2 BLE firmware (`ibex_firmware.bin`, 2027 functions, 73K li
 │   └── connect_deck.py              # BLE connection (subprocess-based)
 ├── firmware/
 │   ├── README.md                      # Firmware metadata, checksums, version info
-│   ├── ibex_firmware.bin              # Placeholder — see firmware/README.md
-│   └── proteus_firmware.bin           # Placeholder — see firmware/README.md
+│   ├── ibex_firmware.bin.placeholder.txt  # See firmware/README.md for real binary info
+│   └── proteus_firmware.bin.placeholder.txt  # See firmware/README.md for real binary info
 ├── ghidra-projects/                 # Ghidra exports (local, ~/ghidra-projects/exports/32bit/)
                                      # Also mirrored in ~/spoofdeck-ghidra/steamclient_exports/
 ├── dbus-config/                     # D-Bus system policy

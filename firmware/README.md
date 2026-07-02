@@ -36,7 +36,7 @@ The actual firmware binaries are not stored in this repository. They are extract
 2. Find the firmware files at `~/.steam/steam/firmware/`
 3. Copy them to this directory as `ibex_firmware.bin` and `proteus_firmware.bin`
 4. Verify SHA-256 checksums match the table above
-5. Place both files in `.gitignore` to prevent accidental commits
+5. Delete the `.placeholder.txt` files once the real binaries are in place
 
 ## Why They're Not in the Repo
 
