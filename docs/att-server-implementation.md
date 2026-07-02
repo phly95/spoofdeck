@@ -141,7 +141,55 @@ UUID: `0x2902`
 
 When the host writes `[0x01, 0x00]` to a CCCD, the server adds that handle's parent characteristic to `_notification_handles`. Subsequent `send_notification()` calls will send ATT Handle Value Notifications.
 
-CCCD state is persisted per-client in `_client_cccds` (keyed by client address). On reconnection, previously-enabled CCCDs are restored automatically (`att_server.py:140-148`), and `_on_cccd_enabled` is called for each restored handle so the application can resume sending notifications without waiting for the host to re-subscribe.
+#### CCCD Write Processing
+
+When a Write Request (0x12) arrives on a CCCD handle (`att_server.py:501-549`):
+
+1. Server checks if the attribute UUID is `0x2902`
+2. Calls `_find_cccd_value_handle(cccd_handle)` — walks backwards from the CCCD handle searching for a Characteristic Declaration (UUID `0x2803`), then extracts the value handle from its value field (`att_server.py:464-475`)
+3. If the CCCD value has bit 0 set (`ccc_value & 0x0001`), adds the value handle to `_notification_handles`
+4. If bit 0 is clear, removes the value handle from `_notification_handles`
+5. Calls `_on_cccd_enabled(value_handle)` callback so the application layer can react (e.g., send pre-fill notifications)
+
+**Known limitation**: Write Command (0x52) does not process CCCD writes. Only Write Request (0x12) triggers CCCD logic. This means a host that uses Write Command for CCCD writes will not enable notifications. In practice, BlueZ uses Write Request for CCCDs, so this is not a real-world issue.
+
+#### CCCD Persistence Across Reconnections
+
+CCCD state is persisted per-client in `_client_cccds` (keyed by client address). On reconnection (`att_server.py:140-148`):
+
+1. Server looks up the client address in `_client_cccds`
+2. Restores `_notification_handles` from the stored set
+3. Calls `_on_cccd_enabled` for each restored handle, so the application can resume sending notifications immediately
+
+This is important because BLE connections may use different addresses across sessions. The raw L2CAP socket uses IP-based `conn_addr`, which is stable for a given host.
+
+#### CCCD Timing Fix
+
+When `_on_cccd_enabled` fires for the gamepad handle (Report ID 1, 12 bytes) or the SC2 CHR_REPORT handle (Report ID 0x45, 45 bytes), `main_l2cap.py:767-779` immediately sends a zero-notification to pre-fill the UHID queue:
+
+```python
+# CCCD TIMING FIX: Send initial zero notifications to pre-fill the UHID queue.
+# CGetControllerInfoWorkItem::RunFunc calls SDL_hid_read_timeout 51x at 100ms.
+# If no data is available, it stalls the entire init chain (gate at [esi+0x17c]
+# is never set, blocking haptics/commands). Sending zero reports immediately
+# when the CCCD is enabled ensures data is available on the first read.
+if handle == self._report_handle and self.att_server:
+    zero_gamepad = b'\x00' * 12
+    self.att_server.send_notification(self._report_handle, zero_gamepad)
+if handle == self._sc2_hid_handle and self.att_server:
+    zero_sc2 = b'\x00' * 45
+    self.att_server.send_notification(self._sc2_hid_handle, zero_sc2)
+```
+
+Without this fix, Steam-generated haptics (trackpad clicks, UI feedback) don't work because `CGetControllerInfoWorkItem` stalls before the haptic gate is set. In-game rumble still works because `SDL_RumbleJoystick` uses `SDL_hid_write` (host → device) which doesn't depend on the init chain completing.
+
+#### Notification Capping
+
+Notifications are capped to MTU - 3 bytes per ATT spec (opcode `0x1B` = 1 byte + handle = 2 bytes overhead). With the default negotiated MTU of 517, the effective maximum notification payload is 514 bytes (`att_server.py:641-642`).
+
+#### Notification Drops
+
+If `send_notification()` is called for a handle not in `_notification_handles` (no CCCD enabled), the notification is silently dropped and counted in `_diag_notif_dropped`. The first drop and every 200th subsequent drop per handle are logged. This is useful for diagnosing subscription issues.
 
 ### Report Map
 

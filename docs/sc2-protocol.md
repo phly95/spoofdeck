@@ -26,6 +26,46 @@ The real SC2 firmware (nRF52840, Zephyr RTOS) registers GATT services as follows
 
 For the complete handle layout (87 attributes, 6 services) with all UUIDs and handle numbers, see `docs/att-server-implementation.md`.
 
+### CCCD Subscription Architecture
+
+The SC2 BLE profile has **9 CCCDs** (Client Characteristic Configuration Descriptors, UUID `0x2902`). Not all are equally important — some are mandatory per the HID/BLE spec, others are critical for the spoof to function.
+
+| # | Service | Characteristic | Subscribed By | Purpose |
+|---|---------|---------------|---------------|---------|
+| 1 | GATT (0x1801) | Service Changed | — | Mandatory per BLE spec. Never subscribed in practice for this use case. |
+| 2 | HID | Report ID 1 — Gamepad (12B) | hog-ll | Standard HID. Creates `/dev/hidrawN` + `/dev/input/eventN`. Our gamepad notifications flow here. |
+| 3 | HID | Report ID 3 — Mouse (4B) | hog-ll | Standard HID. Required by hog-ll for full HOG profile. Not critical for gamepad function. |
+| 4 | HID | Report ID 4 — Keyboard (8B) | hog-ll | Standard HID. Same as mouse — required by spec, not critical. |
+| 5 | HID | Report ID 0x45 — SC2 Custom (45B) | hog-ll | **Primary input path.** hog-ll subscribes → UHID → Steam reads. Must have CCCD. |
+| 6 | HID | Report ID 0x47 — SC2 Extended (47B) | hog-ll | Extended input (adds trackpad timestamps). hog-ll subscribes if present. |
+| 7 | Valve Custom | Input CH1 — 0x45 data (45B) | Steam | Steam reads this directly via Valve Custom UUID, bypassing hog-ll. |
+| 8 | Valve Custom | Input CH2 — 0x47 data (47B) | Steam | Same as above for extended report. |
+| 9 | Battery | Battery Level | hog-ll | Required for hog-ll to create `/dev/hidrawN`. Without it, no hidraw node appears. |
+
+#### Why 0x45/0x47 Are Registered Twice
+
+SC2 Custom Input Reports (0x45, 0x47) appear in **two** services simultaneously:
+
+1. **HID Service** (as CHR_REPORT with Report Reference descriptors) — this is what BlueZ's hog-ll driver sees. hog-ll only processes Report characteristics inside the HID Service. When the host writes a CCCD here, hog-ll creates the UHID device and starts routing notifications to `/dev/hidrawN`.
+
+2. **Valve Custom Service** (with Valve UUIDs `100F6C7A-...`/`100F6C7C-...`) — Steam's `CGetControllerInfoWorkItem` reads directly from these UUIDs, bypassing hog-ll entirely. Steam expects to find input data at these specific Valve UUIDs.
+
+Both copies get the same notification data. The HID Service copies feed the hog-ll/UHID pipeline; the Valve Custom copies are read directly by Steam's controller initialization code.
+
+#### The CCCD Timing Gap
+
+The CCCD subscription timing is the **root cause of missing Steam haptics**. Here's why:
+
+1. Host connects, discovers GATT services, writes CCCDs
+2. BlueZ hog-ll creates UHID device, starts routing to `/dev/hidrawN`
+3. Steam's `CGetControllerInfoWorkItem::RunFunc` (0x01218840) calls `SDL_hid_read_timeout` 51× at 100ms intervals
+4. **If no data is available at `/dev/hidrawN` during this window**, the init chain stalls and the haptic gate (`[esi+0x17c]`) is never set
+5. 0x8F commands are never dispatched → Steam-generated haptics don't work
+
+The fix: when the gamepad CCCD is enabled, the server immediately sends a zero-notification to pre-fill the UHID queue (see `docs/att-server-implementation.md` "CCCD Timing Fix"). In-game rumble works because it takes a different code path (`SDL_RumbleJoystick` → `SDL_hid_write`) that doesn't depend on the init chain.
+
+For the full init chain stall analysis, see `docs/findings-backlog.md`.
+
 ### Valve Custom Service
 
 ```
