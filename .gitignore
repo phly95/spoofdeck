@@ -17,3 +17,6 @@ firmware/*_string_xrefs.json
 *.gpr
 *.rep/
 hardwareupdater.x86_64_extracted/
+
+# Real firmware binaries (proprietary Valve code — see firmware/README.md)
+firmware/*.bin
