@@ -181,25 +181,18 @@ This project produced a detailed map of Steam's controller handling architecture
 ```
 ├── AGENTS.md                        # Project continuation guide (read first)
 ├── README.md                        # This file
-├── pii.env.example                  # Configuration template (copy to pii.env)
 ├── docs/
 │   ├── sc2-protocol.md              # SC2 BLE protocol — PIDs, UUIDs, report formats
 │   ├── att-server-implementation.md # ATT opcode table, handle layout, host discovery
 │   ├── findings-backlog.md          # Known issues and technical findings
 │   ├── hardware-findings.md         # Deck hardware: USB, BT, HID descriptors
 │   ├── steam-client-analysis.md     # steamclient.so analysis, firmware files
-│   ├── challenges.md                # Known challenges and solutions
-│   └── investigation-plan.md        # Investigation methodology
+│   └── archive/                     # Historical: challenges.md (all resolved)
 ├── research/
-│   ├── raw-l2cap-viability.md       # Why raw L2CAP works
-│   ├── debug-bluetoothd-analysis.md # BlueZ GATT listener bug proof
-│   ├── att-mtu-failure-analysis.md  # ATT MTU root cause
-│   ├── smp-pairing-bypass-bluez.md  # SMP/ATT separation deep dive
-│   ├── implementation-roadmap.md    # Implementation plan
-│   ├── 32bit_ghidra_findings.md     # Controller behavior map (15+ offsets, 7 gate interactions)
-│   ├── ibex_command_table.md        # Firmware 95-command dispatch table
-│   ├── triton_vs_steamclient_crossref.md  # Firmware ↔ host cross-reference
-│   └── serial-format-analysis.md    # Serial validation analysis
+│   ├── triton-firmware-reference.md # SC2 BLE firmware RE (state machine, HID, commands)
+│   ├── puck-crossref-reference.md   # Puck dongle firmware + cross-transport analysis
+│   ├── serial-format-analysis.md    # Serial validation analysis
+│   └── archive/                     # Completed research (roadmap, BlueZ debug, etc.)
 ├── src/
 │   ├── main_l2cap.py                # ENTRYPOINT — raw L2CAP ATT server
 │   ├── att_server.py                # Raw L2CAP ATT server (CID 4)
@@ -219,18 +212,11 @@ This project produced a detailed map of Steam's controller handling architecture
 ├── firmware/
 │   ├── ibex_firmware.bin            # Triton SC2 BLE firmware (350KB, nRF52840)
 │   └── proteus_firmware.bin         # Puck Dongle firmware (194KB)
-├── ghidra-projects/                 # Ghidra analysis (local, not in git)
-│   ├── exports/32bit/
-│   │   ├── full_decompiled_32bit.c  # Full decompilation (6.7M lines, 185 MB)
-│   │   ├── functions.csv            # 141,351 functions
-│   │   ├── call_graph.csv           # 16,494 call edges
-│   │   └── strings.csv              # 56,317 strings
-│   └── scripts/
-│       ├── decompile_all.py         # Full decompilation script
-│       └── retry_timedout.py        # Retry 8 timed-out functions (300s timeout)
-└── deprecated/
-    ├── main.py                      # DEPRECATED — uses BlueZ GATT (broken)
-    └── gatt_app.py                  # DEPRECATED — D-Bus GATT objects
+├── ghidra-projects/exports/32bit/   # Full decompilation (141K functions, 6.7M lines)
+├── dbus-config/                     # D-Bus system policy
+├── deprecated/                      # Broken/unused: main.py, gatt_app.py
+├── patches/                         # check_static_addr.patch
+└── scratch/                         # Temporary captures (gitignored)
 ```
 
 ## Reading the Documentation
@@ -256,9 +242,8 @@ The deepest technical content is in `research/`:
 
 | Document | What It Covers | Depth |
 |----------|---------------|-------|
-| `research/32bit_ghidra_findings.md` | Controller behavior map — struct offsets, gate mechanism, input/command path separation, firmware cross-references | **Start here** |
-| `research/ibex_command_table.md` | Firmware 95-command dispatch table with TBH jump table resolution, response formats, string references | Firmware protocol |
-| `research/triton_vs_steamclient_crossref.md` | How firmware and host binary map to each other | Cross-binary analysis |
+| `research/triton-firmware-reference.md` | SC2 BLE firmware — state machine, HID input, command dispatch, 100 commands | **Start here** |
+| `research/puck-crossref-reference.md` | Puck dongle firmware, ESB protocol, firmware vs host cross-reference | Cross-binary analysis |
 | `docs/att-server-implementation.md` | ATT opcode table, handle layout, host discovery sequence | ATT protocol |
 | `docs/findings-backlog.md` | All known issues ranked by severity, with evidence | Bug tracker |
 | `docs/steam-client-analysis.md` | steamclient.so analysis methodology and findings | Binary RE |
@@ -269,10 +254,10 @@ The deepest technical content is in `research/`:
 For the complete reverse engineering story:
 
 1. **AGENTS.md** — the executive summary (read this first, always)
-2. **research/32bit_ghidra_findings.md** — the detailed findings
-3. **ghidra-projects/exports/32bit/full_decompiled_32bit.c** — the raw evidence (6.7M lines)
-4. **research/ibex_command_table.md** — firmware protocol details
-5. **spoofdeck-ghidra/ibex_firmware.bin_decompiled.c** — firmware decompilation (73K lines)
+2. **research/triton-firmware-reference.md** — SC2 BLE firmware analysis
+3. **research/puck-crossref-reference.md** — Puck firmware + cross-transport analysis
+4. **ghidra-projects/exports/32bit/full_decompiled_32bit.c** — the raw evidence (6.7M lines)
+5. **spoofdeck-ghidra/** — firmware decompilations
 
 The decompilation files are large but searchable. Use `grep` to find specific patterns:
 ```bash
