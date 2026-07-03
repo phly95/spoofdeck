@@ -181,52 +181,33 @@ These are correctness improvements, not blockers. Fix one at a time, test betwee
 4. ATT permission checking
 5. Diagnostic handle labels
 
-### 3. Full Firmware Dump
+### 4. Full Firmware Dump
 
 `ibex_firmware.bin` is 33.4% of nRF52840's 1MB flash. Command descriptors at 0x59b10–0x5a332 beyond the dump. J-Link/SWD needed for full flash dump and further firmware RE.
 
-These are correctness improvements, not blockers. Fix one at a time, test between each.
+### 5. Steam Haptics — ABANDONED
 
-1. Read Blob error code (0x01 → 0x07)
-2. MTU caps on Read/Notify PDUs
-3. PDU length validation
-4. ATT permission checking
-5. Diagnostic handle labels
+**Final conclusion**: Steam-generated haptics (trackpad clicks, UI feedback via 0x8F) cannot flow to a BLE-spoofed controller. The block is architectural, not a patchable bug.
 
-### 3. Full Firmware Dump
+**Evidence**:
+- The haptic scheduler at `0x123e5d0` is **never called** for BLE controllers (GDB breakpoints never fire despite active Deck connection and input flow)
+- `CPulseHapticWorkItem(0)` fires with `running 0.0ms` — the work item completes instantly because it never enters the scheduler
+- The haptic block happens BEFORE the scheduler — upstream in controller setup or work item dispatch
+- A real SC2 also doesn't get Steam-generated haptics over BLE (only game rumble via 0x80 works, which uses SDL_RumbleJoystick → hidraw → UHID → ATT)
 
-`ibex_firmware.bin` is 33.4% of nRF52840's 1MB flash. Command descriptors at 0x59b10–0x5a332 beyond the dump. J-Link/SWD needed for full flash dump and further firmware RE.
+**What was tried** (all failed to produce 0x8F):
+1. ~~0xbc classification patch (0x121ba9c)~~ — post-construction field, no effect
+2. ~~Global vtable A entry patch (A→C)~~ — crashed Steam (vtable A shared by many objects, C methods incompatible with A layout)
+3. ~~Targeted vtable pointer redirect (single object)~~ — couldn't identify the correct object (152 candidates with gate=1,transport=1)
+4. ~~GDB capture of esi at scheduler~~ — scheduler never called for BLE
 
-### 4. Remaining Path to Steam Haptics
+**What works**: Game rumble via 0x80 (SDL_RumbleJoystick) — this is the existing haptic path and doesn't require Steam-generated 0x8F commands.
 
-**What's proven**:
-- LD_AUDIT injection works (SLSsteam-style PATH wrapper, 64-bit stub + 32-bit patcher)
-- Vtable A is the BLE controller vtable, shared by many objects
-- Vtable C has the scheduler-expected function pointers at `+0x74`/`+0x84`
-- Global vtable entry patch A→C crashes (layout mismatch)
-- `+0xbc` classification is post-construction (doesn't affect vtable)
-- Memory scanner finds controller candidates via vtable + gate/transport fields
-
-**What needs to happen**:
-1. **Targeted single-object vtable patch** — Find the live controller object (the one `esi` points to at `0x123e5fb`) and patch ONLY its vtable pointer to vtable C. Requires either:
-   - Hooking the scheduler to capture `esi` at runtime
-   - Better memory scanner filter (gate=1, transport=1, and additional field validation)
-2. **Find the factory/constructor branch** — The code that writes `vtable_A` vs `vtable_C` to new objects. Patch the BLE path to write vtable C instead. This is the "real" fix.
-3. **Accept layout mismatch** — If C methods fundamentally need C-layout objects, then the only fix is constructing C-layout objects from BLE input (very complex).
-
-**Key addresses**:
-- Scheduler vtable check: `0x123e640` (vt[0x74]) and `0x123e654` (vt[0x84])
-- Vtable A definition: `g_code_base + 0x02e6ce2c`
-- Vtable C definition: `g_code_base + 0x02e6c940`
-- PID dispatch: `0x121ba96` (BLE→2), `0x121c2d4` (USB→1)
-- Controller info setter (`+0x10c`): `0x1690cf4`
-- Haptic gate setter (`+0x17c`): `0x172cfb0`, `0x172fc4a`, `0x178a140`
-
-**LD_AUDIT infrastructure**:
-- 64-bit no-op stub: `patches/sc2_gate_audit_64.so` (DO NOT strip LD_AUDIT)
-- 32-bit patcher: `patches/sc2_gate_audit.so.bak` (renamed to prevent auto-load)
-- SLSsteam-style wrapper: `~/.local/share/SLSsteam/path/steam`
-- To re-enable: rename `.so.bak` back to `.so`, kill+relaunch Steam via wrapper
+**Infrastructure preserved** (for potential future use):
+- LD_AUDIT injection: 64-bit no-op stub + 32-bit patcher
+- SLSsteam-style PATH wrapper: `~/.local/share/SLSsteam/path/steam`
+- Vtable definitions: A at `g_code_base + 0x02e6ce2c`, C at `g_code_base + 0x02e6c940`
+- ELF address rule: `runtime = ELF_load_base + vaddr`
 
 ---
 

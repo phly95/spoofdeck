@@ -54,21 +54,20 @@ The fix: a raw L2CAP socket on CID 4 bound directly to `C2:12:34:56:78:9A` with 
 
 3. **Steam-generated haptics via 0x8F** (USB/Dongle ONLY):
    - Steam UI → `CPulseHapticWorkItem` → 0x8F sub-command → firmware haptic script trigger
-   - **BLOCKED on BLE by 5-layer defense in steamclient.so** — not just the gate at `[esi+0x17c]`
+   - **BLOCKED on BLE by upstream dispatch** — not just the gate at `[esi+0x17c]`
    - A real SC2 only gets these haptics through the Puck dongle (USB, state 1-2)
-   - LD_AUDIT patching investigated: 4 of 5 layers patchable, but layer 5 (vtable integrity checks) + deeper validation makes this impractical
-   - See `docs/findings-backlog.md` for full 5-layer analysis
+   - LD_AUDIT patching investigated: scheduler at `0x123e5d0` is never called for BLE controllers. Block is upstream in controller setup/dispatch, before vtable checks.
+   - See `docs/findings-backlog.md` for full analysis
 
 **Not working:**
-- **Steam-generated haptics** (trackpad clicks, UI feedback) — 5-layer haptic block in steamclient.so prevents BLE controllers from receiving 0x8F commands. Even with LD_AUDIT patching all known gates, vtable integrity checks and deeper validation reject the BLE controller object. This is a fundamental architectural limitation — not a bug. Real SC2 also doesn't get these haptics over BLE. See `docs/findings-backlog.md`.
+- **Steam-generated haptics** (trackpad clicks, UI feedback via 0x8F) — Architecturally blocked. The haptic scheduler at `0x123e5d0` is never called for BLE controllers (GDB confirmed). `CPulseHapticWorkItem` fires with 0.0ms runtime — the work item completes instantly because it never enters the scheduler. The block happens upstream of the scheduler, before vtable checks. Real SC2 also doesn't get these haptics over BLE. LD_AUDIT investigation completed — see `docs/findings-backlog.md` for full analysis.
 
 **Previously broken, now resolved:** Zombie disconnects and encryption errors were caused by stale BlueZ state. Fixed by clearing bond data + host reboot.
 
 ## What Needs to Happen Next
 
-1. **Early Transport State Patch** — Patch `0x101dd73` (`mov %edx, 0x1d8(%edi)`) to force USB state (1) instead of BLE state (0). This is the **transport classification** that happens before controller construction. Patching this one instruction makes Steam build the USB-style controller from the start, with correct vtable and all haptic fields. See `docs/findings-backlog.md` "Early Transport State Patch" section for full details. This is the **highest priority** — one code patch replaces all 5+ layers of scheduler haptic patching.
-2. **ATT Server Spec Compliance** (one at a time, test each): Read Blob error code (0x01→0x07), MTU caps on Read/Notify, PDU length validation, ATT permission checking, diagnostic handle labels.
-3. **Full flash dump** — `ibex_firmware.bin` is 33.4% of nRF52840's 1MB flash. Command descriptors at 0x59b10–0x5a332 beyond the dump. J-Link/SWD needed.
+1. **ATT Server Spec Compliance** (one at a time, test each): Read Blob error code (0x01→0x07), MTU caps on Read/Notify, PDU length validation, ATT permission checking, diagnostic handle labels.
+2. **Full flash dump** — `ibex_firmware.bin` is 33.4% of nRF52840's 1MB flash. Command descriptors at 0x59b10–0x5a332 beyond the dump. J-Link/SWD needed.
 
 ## Files to Read Before Making Changes
 
