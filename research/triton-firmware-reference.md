@@ -979,16 +979,29 @@ Both follow: lookup command type → negate → call dispatch via wrapper → bu
 
 ---
 
-## 6. Haptic System
+## 6. Haptic System — Three-Path Architecture
 
-### Firmware-Side Haptics
+### Path 1: Firmware-Local Haptics (SC2 nRF52840 only)
+
+The SC2 firmware has a complete, self-contained haptic sequencer that generates feedback **independently of the host**. The host does NOT upload haptic patterns — scripts are firmware-internal, selected by ID.
 
 **Haptic Architecture Strings:**
-- `haptic_script` — Named haptic script sequences
+- `haptic_script` — Named haptic script sequences (pre-programmed, firmware-internal)
 - `haptics_sequencer` — Haptic sequencer module
 - `haptics-sequencer-gri-v3` — Grip haptic sequencer
 - `haptics-sequencer-touchpad` — Touchpad haptic sequencer
 - `channel-left` / `channel-right` — Motor channels
+
+**How scripts are triggered:**
+- `"Haptic script ID: %d gain %d"` — Script selection with gain (host sends script ID via 0x8F sub-command, firmware executes the corresponding internal script)
+- `"Haptics script already active - ignoring new script"` — Mutual exclusion (only one script runs at a time)
+- `"sequence init: %d"` — Sequence initialization
+- `"Inappropriate trigger (%d/%d), active stream(s): %d"` — Trigger validation
+
+**Trackpad touch → local haptic:**
+- `FUN_00015170` (Trackpad Touch Event, 144 bytes) detects finger movement
+- If `|X - Y| > 99` (movement threshold), calls `FUN_0003347c` (haptic trigger on touch)
+- The haptics-sequencer-touchpad module plays a basic click script
 
 **Haptic Settings (stored in flash):**
 ```
@@ -998,20 +1011,20 @@ settings/haptics/amplifier_mode        — Amplifier mode
 user/haptic_boot_level                 — Boot level
 ```
 
+Configured via host SET_SETTINGS (0x87) registers 70, 79, 3, 15. These are scalar parameters, not script data.
+
 **Grip Haptics:**
 - `"Left lower grip"` / `"Left upper grip"` — Left grip motor control
 - `"R_LOWER_GRIP"` / `"R_UPPER_GRIP"` — Right grip motor references
 - `"grip de-touch threshold"` / `"grip touch threshold"` — Touch detection thresholds
 
-**Haptic Trigger:**
-- `"Haptic script ID: %d gain %d"` — Script selection with gain
-- `"Haptics script already active - ignoring new script"` — Only one script at a time
-- `"sequence init: %d"` — Sequence initialization
-- `"Inappropriate trigger (%d/%d), active stream(s): %d"` — Trigger validation
+**Not available to SpoofDeck** — Deck's Neptune controller lacks the SC2's haptic sequencer. The Neptune has raw ERM motors driven by InputPlumber's PackedRumbleReport, not the SC2's script-based system.
+
+### Path 2: Game Rumble via 0x80 (works on any transport)
+
+The actual motor output command. Games call `SDL_RumbleJoystick()` which writes a 0x80 output report to `/dev/hidrawN`. This bypasses the haptic sequencer entirely and drives the motors directly.
 
 **Command 0x80 — SET haptic/rumble output:** The haptic motor output command in firmware dispatch. String: `"Failed to set haptics master gain"` nearby.
-
-### Host-Side Haptic Pipeline
 
 **Output Report 0x80 (9 bytes):**
 ```
@@ -1022,14 +1035,7 @@ Forwarded to Neptune as PackedRumbleReport:
 [0xeb, 0x09, 0x00, 0x00, 0x00, left_lo, left_hi, right_lo, right_hi] (64 bytes)
 ```
 
-**Output Report 0x81 (7 bytes):**
-```
-Direct command: [0x81, ...] — clears digital mappings
-Must be re-sent periodically (~2 seconds) as lizard mode auto-re-enables
-```
-
 **Haptic Pipeline (Verified from BlueZ 5.86 + Ghidra):**
-
 ```
 Game → SDL_RumbleJoystick(low_freq, high_freq)
   → HIDAPI_DriverSteamTriton_RumbleJoystick() [every 6ms, 40ms throttle]
@@ -1041,20 +1047,16 @@ Game → SDL_RumbleJoystick(low_freq, high_freq)
   → PackedRumbleReport to /dev/hidraw3 → Neptune ERM motors
 ```
 
-**Steam-generated haptics (NOT WORKING — init chain stalls):** The controller initialization chain stalls because `CGetControllerInfoWorkItem::RunFunc` (0x01218840) calls `SDL_hid_read_timeout` via vtable[5] and gets 0 bytes. The read returns 0 because no ATT notifications reach `/dev/hidrawN` during the init window — the CCCD subscription registration has a timing gap.
+This path is NOT gated by `[esi+0x17c]`. Works on USB, Dongle, and BLE.
 
-Init chain:
+### Path 3: Steam-Generated Haptics via 0x8F (USB/Dongle ONLY)
+
+Steam sends 0x8F sub-commands to trigger firmware haptic scripts (UI feedback, trackpad click sounds, etc.). 0x8F is a **multiplexed command envelope** — the byte after 0x8F selects a sub-command (e.g., `ID_TRIGGER_HAPTIC_PULSE`, `ID_GET_ATTRIBUTES_VALUES`).
+
+**Output Report 0x81 (7 bytes):**
 ```
-CHIDIOThread_Main (0x011b3a60)
-  → CWorkItemThread (0x011d5850)
-    → CGetControllerInfoWorkItem::RunFunc (0x01218840)
-      → SDL_hid_read_timeout → 0 bytes, retries 51 × 100ms = 5.1s
-      → Logs "Read failure", then "too many read failures"
-      → EYldWaitForControllerDetails (0x011cee30) times out after 2s
-        → Gate SET at 0x0178a140 never reached
-          → Gate [esi+0x17c] stays 0
-            → 0x8F dispatcher path never entered
-              → No haptic commands sent
+Direct command: [0x81, ...] — clears digital mappings
+Must be re-sent periodically (~2 seconds) as lizard mode auto-re-enables
 ```
 
 **Haptic pipeline config variables:** `haptic_new`, `haptic_intensity`, `haptic_intensity_old`, `haptic_off_divisor`, `ibex_rumble_deadzone`, `g_RumbleRepeatAfterDelaySeconds` (0.050), `g_RumbleSustainTimeSeconds`.
