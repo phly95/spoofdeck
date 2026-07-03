@@ -449,6 +449,16 @@ class GattDatabase:
             0xB1, 0x02,        #   Feature (Data,Var,Abs)
             0xC0,              # End Collection
 
+            # --- Feature Report 0x8F (SC2 Haptic Command, 64 bytes) ---
+            0x06, 0x00, 0xFF,  # Usage Page (Vendor Defined 0xFF00)
+            0x09, 0x8F,        # Usage (0x8F)
+            0xA1, 0x02,        # Collection (Logical)
+            0x85, 0x8F,        #   Report ID (0x8F)
+            0x75, 0x08,        #   Report Size (8)
+            0x95, 0x40,        #   Report Count (64)
+            0xB1, 0x02,        #   Feature (Data,Var,Abs)
+            0xC0,              # End Collection
+
         ])
 
 
@@ -517,6 +527,9 @@ def build_sc2_database(device_name="Steam Controller 2026"):
         ]),
         (CHR_REPORT, ATT_PROP_READ | ATT_PROP_WRITE, b'\x00' * 64, [
             (DESC_REPORT_REF, bytes([0x87, 0x03])),  # Report ID 0x87, Feature
+        ]),
+        (CHR_REPORT, ATT_PROP_READ | ATT_PROP_WRITE, b'\x00' * 64, [
+            (DESC_REPORT_REF, bytes([0x8F, 0x03])),  # Report ID 0x8F, Feature (Haptic Command)
         ]),
         # SC2 Custom Input Reports — MUST be in HID Service for hog-ll to subscribe.
         # Data is sent on BOTH these handles AND the Valve Custom Service handles.

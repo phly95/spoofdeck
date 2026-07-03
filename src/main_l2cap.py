@@ -197,9 +197,9 @@ class HoGPeripheral:
     SC2_CMD_GET_SERIAL             = 0xAE
 
     def _setup_feature_report_callbacks(self):
-        """Register callbacks for Feature Reports (Report IDs 0x01, 0x02, 0x85, 0x86, 0x87)."""
+        """Register callbacks for Feature Reports (Report IDs 0x01, 0x02, 0x85, 0x86, 0x87, 0x8F)."""
         self._pending_fr_response = {}  # report_id -> response bytes (for command/response pattern)
-        feature_report_ids = [0x01, 0x02, 0x85, 0x86, 0x87]
+        feature_report_ids = [0x01, 0x02, 0x85, 0x86, 0x87, 0x8F]
         for report_id in feature_report_ids:
             handle = self._find_report_char_handle(report_id, 0x03)  # 0x03 = Feature Report
             if handle:
@@ -370,6 +370,11 @@ class HoGPeripheral:
         # SC2 command channels — handle synthetically
         if report_id in (0x01, 0x02):
             self._handle_sc2_command(report_id, value)
+            return
+
+        # 0x8F Haptic Command — forward to Neptune and return response
+        if report_id == 0x8F:
+            self._handle_haptic_command(report_id, value)
             return
 
         # Other Feature Reports — proxy to Neptune
@@ -680,6 +685,39 @@ class HoGPeripheral:
                 print(f"[-] Proxy Feature Report 0x{report_id:02x} read error: {e}")
                 self._close_neptune_feature_fd()
         return b'\x00' * 64
+
+    def _handle_haptic_command(self, report_id, value):
+        """Forward 0x8F haptic command to Neptune and queue response.
+
+        When the LD_PRELOAD patch opens the gate, Steam sends 0x8F Feature Report
+        writes to trigger haptic effects. We forward these to Neptune's firmware
+        via HIDIOCSFEATURE and queue the response for the next Feature Report read.
+        """
+        print(f"[DIAG] 🎮 → 0x8F Haptic Command: {value[:10].hex()}... len={len(value)}")
+        self._ensure_neptune_feature_fd()
+        if self._neptune_feature_fd:
+            try:
+                import fcntl, array, struct
+                report_data = list(value) if len(value) > 0 else [0x8F]
+                if report_data[0] != 0x8F:
+                    report_data = [0x8F] + report_data
+                length = len(report_data)
+                ioctl_num = (3 << 30) | (length << 16) | (72 << 8) | 6
+                buf = array.array('B', report_data)
+                fcntl.ioctl(self._neptune_feature_fd, ioctl_num, buf, True)
+                # Queue a success response for the next FR read
+                response = bytearray(64)
+                response[0] = 0x8F
+                response[1] = 0x01  # success
+                self._pending_fr_response[report_id] = bytes(response)
+                print(f"[DIAG] 🎮 ← 0x8F forwarded to Neptune, response queued")
+            except Exception as e:
+                print(f"[-] 0x8F forward error: {e}")
+                # Queue a zero response so the read doesn't hang
+                self._pending_fr_response[report_id] = bytes(64)
+        else:
+            print(f"[-] 0x8F: Neptune fd not available, queuing zero response")
+            self._pending_fr_response[report_id] = bytes(64)
 
     def _proxy_feature_write(self, report_id, value):
         """Proxy a Feature Report write to Neptune hardware (for non-SC2 reports)."""

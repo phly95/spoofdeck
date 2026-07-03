@@ -40,6 +40,9 @@ FILES=(main_l2cap.py att_server.py gatt_db.py input_handler.py agent.py adv.py b
 
 echo "=== Deploying to Deck ==="
 
+# Ensure remote directories exist
+sshpass -p "$DECK_PASSWORD" ssh $SSH_OPTS "$DECK_HOST" "mkdir -p $DECK_DIR /tmp/sc2-spoof/scripts"
+
 deployed=0
 for f in "${FILES[@]}"; do
     if [[ -n "$FILE_FILTER" && "$f" != *"$FILE_FILTER"* ]]; then
@@ -59,6 +62,16 @@ if [[ $deployed -eq 0 ]]; then
 fi
 
 echo "[+] Deployed $deployed file(s)"
+
+# Deploy scripts separately to scripts dir
+SCRIPTS_DIR="$(cd "$(dirname "$0")" && pwd)"
+for f in config_bt.py extract_proto_trace.py; do
+    src="$SCRIPTS_DIR/$f"
+    if [[ -f "$src" ]]; then
+        echo "  SCP: scripts/$f"
+        sshpass -p "$DECK_PASSWORD" scp $SSH_OPTS "$src" "$DECK_HOST:/tmp/sc2-spoof/scripts/$f"
+    fi
+done
 
 if [[ "$NO_RESTART" == "false" ]]; then
     echo "=== Restarting sc2-hogp ==="
