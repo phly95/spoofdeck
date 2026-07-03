@@ -54,21 +54,21 @@ The fix: a raw L2CAP socket on CID 4 bound directly to `C2:12:34:56:78:9A` with 
 
 3. **Steam-generated haptics via 0x8F** (USB/Dongle ONLY):
    - Steam UI → `CPulseHapticWorkItem` → 0x8F sub-command → firmware haptic script trigger
-   - **BLOCKED on BLE by design** — BLE controllers (state 3-4) never open the gate at `[esi+0x17c]`
+   - **BLOCKED on BLE by 5-layer defense in steamclient.so** — not just the gate at `[esi+0x17c]`
    - A real SC2 only gets these haptics through the Puck dongle (USB, state 1-2)
-   - See `docs/findings-backlog.md` for the full gate analysis
+   - LD_AUDIT patching investigated: 4 of 5 layers patchable, but layer 5 (vtable integrity checks) + deeper validation makes this impractical
+   - See `docs/findings-backlog.md` for full 5-layer analysis
 
 **Not working:**
-- **Steam-generated haptics** (trackpad clicks, UI feedback) — The init chain (`CHIDIOThread` → `CGetControllerInfoWorkItem::RunFunc` at 0x01218840) stalls because `SDL_hid_read_timeout` returns 0 bytes. Root cause: CCCD subscription timing gap — notifications don't reach `/dev/hidrawN` during the init window. The gate at `[esi+0x17c]` is never reached. The gate only blocks the command/haptic pipeline, not input. See `research/triton-firmware-reference.md`.
+- **Steam-generated haptics** (trackpad clicks, UI feedback) — 5-layer haptic block in steamclient.so prevents BLE controllers from receiving 0x8F commands. Even with LD_AUDIT patching all known gates, vtable integrity checks and deeper validation reject the BLE controller object. This is a fundamental architectural limitation — not a bug. Real SC2 also doesn't get these haptics over BLE. See `docs/findings-backlog.md`.
 
 **Previously broken, now resolved:** Zombie disconnects and encryption errors were caused by stale BlueZ state. Fixed by clearing bond data + host reboot.
 
 ## What Needs to Happen Next
 
-1. **GDB on host Steam process (RECOMMENDED)** — Breakpoint on `CGetControllerInfoWorkItem::RunFunc` (0x01218840) to see what `SDL_hid_read_timeout` returns. Confirms timing vs format issue. Alternative: capture Steam's `controller.txt` logs and btmon ATT traffic.
-2. **LD_PRELOAD patch for 0x8F gate (AFTER init fix)** — Gate CHECK at `0x0123e5fb` can be patched with `nop nop`, but only after the init chain is fixed to reach that code path. 55-65% probability.
-3. **ATT Server Spec Compliance** (one at a time, test each): Read Blob error code (0x01→0x07), MTU caps on Read/Notify, PDU length validation, ATT permission checking, diagnostic handle labels.
-4. **Full flash dump** — `ibex_firmware.bin` is 33.4% of nRF52840's 1MB flash. Command descriptors at 0x59b10–0x5a332 beyond the dump. J-Link/SWD needed.
+1. **ATT Server Spec Compliance** (one at a time, test each): Read Blob error code (0x01→0x07), MTU caps on Read/Notify, PDU length validation, ATT permission checking, diagnostic handle labels.
+2. **Full flash dump** — `ibex_firmware.bin` is 33.4% of nRF52840's 1MB flash. Command descriptors at 0x59b10–0x5a332 beyond the dump. J-Link/SWD needed.
+3. **USB gadget mode** (if Steam haptics are required) — Deck presents as USB HID over USB-C cable. Host sees USB device, all haptics work natively. Requires USB gadget driver on Deck side.
 
 ## Files to Read Before Making Changes
 

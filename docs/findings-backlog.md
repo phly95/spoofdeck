@@ -85,21 +85,59 @@ Note: Even with init chain completing, Steam haptics still don't work on BLE due
 
 ---
 
-## The 0x8F Gate (BLE Design Limitation, NOT a Bug)
+## The 0x8F Gate — Multi-Layer Haptic Block (BLE Design Limitation)
 
-The gate at `[esi+0x17c]` is entirely in steamclient.so. The gate CHECK at `0x0123e5fb` skips 0x8F dispatch when `[esi+0x17c] == 0`.
+The haptic scheduler function at `0x0123e5d0` (called via vtable from the controller update loop) has **five layers of defense** preventing BLE controllers from receiving Steam haptics. Even with LD_AUDIT/LD_PRELOAD patching all known gates, the scheduler's vtable integrity checks reject the BLE controller object.
 
-**This is a design decision, not a bug.** BLE controllers (PID 0x1303) get controller state 3-4 at `[rdi+0x1d8]`, which routes through a 16-byte allocation path that NEVER sets the gate. USB/Dongle controllers (PIDs 0x1302, 0x1304) get state 1-2, which routes through a 0x210-byte path (YieldingRunTestProgram) that DOES set `[esi+0x17c] = 1`.
+### Layer 1: Primary Gate — `[esi+0x17c]` ✅ PATCHABLE
+- `cmp byte [esi+0x17c], 0; jne +0x290` at vaddr `0x0123e5fb`/`0x0123e602`
+- BLE: gate=0 → fall-through (skip haptic dispatch)
+- USB/Dongle: gate=1 → jump to dispatch
+- **Patch**: `jne` → `jmp` (unconditional)
 
-| Transport | PID | State | Gate | 0x8F Dispatched? |
-|-----------|-----|-------|------|:-----------------:|
-| USB | 0x1302 | 1-2 | Open | YES |
-| Dongle/Puck | 0x1304 | 1-2 | Open | YES |
-| BLE direct | 0x1303 | 3-4 | Closed | NO |
+### Layer 2: param_4 Active Flag ✅ PATCHABLE
+- `test al, al; je` at vaddr `0x0123e89a`
+- param_4 is the haptic pulse active byte passed by the caller
+- When gate was NOT set (BLE fall-through), param_4=0 → immediate return
+- **Patch**: `je` → `nop nop`
 
-**A real SC2 over BLE direct also does NOT get Steam haptics.** The SC2 only gets haptics through the Puck dongle, which presents as USB (state 1-2).
+### Layer 3: Transport Type `[esi+0x10c]` ✅ PATCHABLE
+- `cmp byte [esi+0x10c], 0; je` at vaddr `0x0123e8b6`
+- BLE: `[esi+0x10c]=0` → takes alt toggle path (may not process haptics)
+- USB/Dongle: `[esi+0x10c]=1` → takes main path
+- **Patch**: `je` → `jmp` (force main path)
 
-Native Deck capture (35s): 16× 0x8F commands. BLE capture: 0× 0x8F commands.
+### Layer 4: Secondary Transport Check `[esi+0x10c]` ✅ PATCHABLE
+- `cmp byte [esi+0x10c], 0; je +0x11b` at vaddr `0x0123e6df`
+- After effect submission attempt, re-checks transport type
+- **Patch**: `je` → `nop nop nop nop nop nop`
+
+### Layer 5: Vtable Integrity Checks ❌ NOT PRACTICAL TO PATCH
+- `cmp [edx+0x74], edi` at `0x0123e640` and `cmp [edx+0x84], edx` at `0x0123e65a`
+- Validates the controller object's vtable entries against expected function pointers
+- BLE controller vtables differ from USB/Dongle vtables (set during `CGetControllerInfoWorkItem::RunFunc`)
+- Even if patched, deeper calls (`FUN_0129ce50` and beyond) may have additional checks
+- **Not patchable in practice** — each patched check reveals another layer; the controller object's internal state is fundamentally different for BLE connections
+
+### LD_AUDIT Implementation (SLSsteam pattern)
+- Library: `patches/sc2_gate_audit.c` — 32-bit, uses `la_objopen` callback when `steamclient.so` loads
+- Strips itself from `LD_AUDIT` in `la_preinit` to prevent re-injection
+- Only activates in `steam` process (checks `/proc/self/comm`)
+- Wrapper: prepend `export LD_AUDIT=...` to `steam.sh`
+- **Confirmed**: All 4 patches applied and verified in running process memory via `/proc/PID/mem`
+- **Result**: CPulseHapticWorkItem still runs 0.0ms. Zero 0x8F commands on Deck.
+
+### Why It's Not Fixable via Patching
+The vtable checks validate the controller object's class hierarchy, which is set during Steam's initialization based on transport type (BLE vs USB). The controller struct at `esi` has fundamentally different vtable pointers, state fields (`[esi+0x10c]`, `[esi+0x17c]`, `[esi+0x6c]`), and function pointers depending on whether it was initialized as a BLE or USB controller. Patching the scheduler's checks doesn't change the underlying controller object — it just skips validation, which may cause crashes in downstream code that assumes USB-like behavior.
+
+**Bottom line**: The haptic path has 5+ layers of defense. Even if all were patched, the controller object's state is set by Steam's BLE initialization code, which doesn't configure the haptic pipeline fields. This is a fundamental architectural limitation — not a bug to fix.
+
+### What Works Today
+- ✅ Game rumble via `SDL_RumbleJoystick` → 0x80 (games using SDL rumble API)
+- ✅ Full controller input (gamepad, trackpads, gyro, back buttons, SC2 custom reports)
+- ✅ Steam recognizes it as Steam Controller 2026 with full Steam Input
+- ❌ Steam-generated haptics (trackpad clicks, UI feedback) — blocked by 5-layer defense in steamclient.so
+- ❌ Real SC2 also doesn't get these over BLE — only via USB Puck dongle
 
 ---
 
@@ -114,17 +152,15 @@ Native Deck capture (35s): 16× 0x8F commands. BLE capture: 0× 0x8F commands.
 
 ## Next Steps
 
-### 1. LD_PRELOAD Patch for 0x8F Gate (RECOMMENDED)
+### 1. ~~LD_PRELOAD/LD_AUDIT Patch for 0x8F Gate~~ — INVESTIGATED, NOT PRACTICAL
 
-The only remaining option for Steam haptics on BLE. Gate CHECK at `0x0123e5fb` can be patched with `nop nop` to unconditionally dispatch 0x8F commands.
+Explored in detail. Built LD_AUDIT library (`patches/sc2_gate_audit.c`) following SLSsteam's pattern. Confirmed patches applied in memory (verified via `/proc/PID/mem`). Found 5-layer haptic block:
+- Layers 1-4: Patchable (gate, param_4, transport type × 2)
+- Layer 5: Vtable integrity checks — NOT practical to patch (each check reveals deeper validation; controller object state is fundamentally different for BLE)
 
-**Probability**: 55-65% — the init chain timing fix is implemented and working, so the gate is the only remaining barrier.
+**Conclusion**: Steam-generated haptics (0x8F) cannot be practically enabled over BLE via binary patching. The controller object's internal state is set by Steam's BLE initialization code, which doesn't configure the haptic pipeline fields. This matches the real SC2 behavior — BLE controllers don't get Steam haptics, only USB ones do via the Puck dongle.
 
-1. Build C library that patches `je` at `0x0123e601` to `nop nop`
-2. Deploy to Deck, test with `LD_PRELOAD=/path/to/libpatch.so`
-3. If Steam haptics start working → done, commit the library
-4. If Steam crashes → secondary gate exists, continue investigation
-5. If no change → haptics pipeline blocked elsewhere, re-examine
+**Alternative**: USB gadget mode (Deck presents as USB HID over USB-C cable) would give full haptics since the host sees a USB device. Or accept the limitation — game rumble via SDL_RumbleJoystick already works.
 
 ### 2. ATT Server Spec Compliance (Not Blocking)
 
