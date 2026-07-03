@@ -423,7 +423,7 @@ class GattDatabase:
             0x06, 0x00, 0xFF,  # Usage Page (Vendor Defined 0xFF00)
             0x09, 0x00,        # Usage (0x00)
             0xA1, 0x02,        # Collection (Logical)
-            0x85, 0x00,        #   Report ID (0x00)
+            0x85, 0x02,        #   Report ID (0x02) - matches real SC2 firmware
             0x75, 0x08,        #   Report Size (8)
             0x95, 0x40,        #   Report Count (64)
             0xB1, 0x02,        #   Feature (Data,Var,Abs)
@@ -452,7 +452,7 @@ class GattDatabase:
         ])
 
 
-def build_sc2_database(device_name="CJohnson Controller 2026"):
+def build_sc2_database(device_name="Steam Controller 2026"):
     """Build the complete SC2 GATT database."""
     db = GattDatabase()
 
@@ -504,7 +504,7 @@ def build_sc2_database(device_name="CJohnson Controller 2026"):
         ]),
         # Feature Reports (Report IDs 0x00, 0x01, 0x85, 0x86, 0x87)
         (CHR_REPORT, ATT_PROP_READ | ATT_PROP_WRITE, b'\x00' * 64, [
-            (DESC_REPORT_REF, bytes([0x00, 0x03])),  # Report ID 0x00, Feature
+            (DESC_REPORT_REF, bytes([0x02, 0x03])),  # Report ID 0x02, Feature
         ]),
         (CHR_REPORT, ATT_PROP_READ | ATT_PROP_WRITE, b'\x00' * 64, [
             (DESC_REPORT_REF, bytes([0x01, 0x03])),  # Report ID 0x01, Feature
@@ -552,8 +552,8 @@ def build_sc2_database(device_name="CJohnson Controller 2026"):
 
     # Device Information Service (0x180A)
     db.add_service(SVC_DEVICE_INFO, [
-        (CHR_MANUFACTURER_NAME, ATT_PROP_READ, b'Wheatley\'s Counterfeits'),
-        (CHR_MODEL_NUMBER, ATT_PROP_READ, b'CJohnson Controller 2026'),
+        (CHR_MANUFACTURER_NAME, ATT_PROP_READ, b'Valve Software'),
+        (CHR_MODEL_NUMBER, ATT_PROP_READ, b'Steam Controller 2026'),
         (CHR_SERIAL_NUMBER, ATT_PROP_READ, b'123456789ABCDEF'),
         (CHR_FIRMWARE_REVISION, ATT_PROP_READ, b'1.0.0'),
         (CHR_HARDWARE_REVISION, ATT_PROP_READ, b'1.0.0'),

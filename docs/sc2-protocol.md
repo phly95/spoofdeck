@@ -223,7 +223,7 @@ The vendor HID interface uses Usage Page 0xFF00 with 64-byte I/O reports. This i
 | 0x45 | Input | 45 bytes | SC2 Custom Input (see TritonMTUNoQuat_t above) |
 | 0x47 | Input | 47 bytes | SC2 Custom Extended Input |
 | 0x80 | Output | 9 bytes | Haptic Rumble Output (see Report 0x80 above) |
-| 0x00 | Feature | 64 bytes | SC2 Command Channel (commands + responses) |
+| 0x02 | Feature | 64 bytes | SC2 Command Channel (commands + responses) |
 | 0x01 | Feature | 64 bytes | SC2 Capabilities |
 | 0x85 | Feature | 64 bytes | SC2 Mode Switch (Lizard ↔ Steam Input) |
 
@@ -249,13 +249,12 @@ Key strings from Steam Client:
 
 | Report ID | Direction | Description |
 |-----------|-----------|-------------|
-| 0x00 | Device ↔ Host | SC2 command channel (GET_ATTRIBUTES, SET_SETTINGS, etc.) |
-| 0x01 | Device → Host | Device capabilities |
+| 0x01/0x02 | Device ↔ Host | SC2 command channel (GET_ATTRIBUTES, SET_SETTINGS, etc.) |
 | 0x85 | Host → Device | Mode switch (lizard/Steam Input) |
 | 0x86 | Host → Device | Configuration |
 | 0x87 | Host → Device | Calibration data |
 
-## SC2 Command Bytes (Feature Report 0x00)
+## SC2 Command Bytes (Feature Reports 0x01/0x02)
 
 **Note**: The Feature Report protocol uses a write-then-read pattern — the host writes a command to FR 0x00, then reads FR 0x00 to get the response. This is non-standard BLE HID behavior. See `docs/att-server-implementation.md` "Feature Report Protocol" section for the full flow, including the dual response mechanism and lifecycle. For the Steam-side implementation, see `research/archive/steamclient-reverse-session/findings.md` (Feature Report handshake analysis).
 
@@ -313,6 +312,28 @@ The firmware handles ~80 additional commands across these categories:
 ### Response Formatter
 
 38 commands have detailed response formats in the firmware's response formatter (`FUN_0000c55c`). Commands 0x01-0x19 and 0x82/0x83 have specific response codes and payload sizes.
+
+## Serial Validation (GET_SERIAL 0xAE)
+
+The GET_SERIAL response has two validation code paths in steamclient.so:
+
+### Path 1: V_strncmp (BLOCKING)
+- Location: V_strncmp call at 0x10c29b3
+- Checks: byte[2] must be 0x01 (success status), serial[0] must be 'F' (0x46)
+- Failure: "Controller Serial# invalid" → identity slot not populated → zombie disconnect
+- This is the PRIMARY validation that determines whether the controller registers
+
+### Path 2: BLE PCB Serial (COSMETIC)
+- Location: FUN_0122e4c0 at 0x122e4c0
+- Checks: serial format against known patterns (Path A: status=0x00, serial[0]='M', serial[2]∈{B,C,D}; Path B: status=0x04, serial[0]='M', serial[1]='X', serial[2]='A')
+- Failure: "Deck Controller PCB Serial# invalid: %s" — logged but does NOT block registration
+- The V_strncmp check runs first; if it passes, the BLE PCB check also runs but is cosmetic only
+
+### Required Format
+- Response byte[0]: 0xAE (command echo)
+- Response byte[1]: 0x15 (payload length, matches write command)
+- Response byte[2]: 0x01 (success status — REQUIRED, 0x00/0x04 trigger blocking error)
+- Response bytes[3-22]: serial string (20 bytes, first byte must be 'F')
 
 ## Settings Registers
 

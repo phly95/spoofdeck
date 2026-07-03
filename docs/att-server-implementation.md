@@ -70,8 +70,8 @@ Host sends ATT PDU → Kernel L2CAP → Our raw socket (CID 4) → _handle_pdu()
 | 0x0023 | 0x2908 (Report Reference) | Report Reference (ID=0x04, Input) |
 | 0x0024 | 0x2902 (CCCD) | CCCD |
 | 0x0025 | 0x2803 (Characteristic) | Characteristic Decl (val=0x0026) |
-| 0x0026 | 0x2A4D (Report) | Report Value (0x00, Feature, 64 bytes) |
-| 0x0027 | 0x2908 (Report Reference) | Report Reference (ID=0x00, Feature) |
+| 0x0026 | 0x2A4D (Report) | Report Value (0x02, Feature, 64 bytes) |
+| 0x0027 | 0x2908 (Report Reference) | Report Reference (ID=0x02, Feature) |
 | 0x0028 | 0x2803 (Characteristic) | Characteristic Decl (val=0x0029) |
 | 0x0029 | 0x2A4D (Report) | Report Value (0x01, Feature, 64 bytes) |
 | 0x002A | 0x2908 (Report Reference) | Report Reference (ID=0x01, Feature) |
@@ -151,7 +151,7 @@ When a Write Request (0x12) arrives on a CCCD handle (`att_server.py:501-549`):
 4. If bit 0 is clear, removes the value handle from `_notification_handles`
 5. Calls `_on_cccd_enabled(value_handle)` callback so the application layer can react (e.g., send pre-fill notifications)
 
-**Known limitation**: Write Command (0x52) does not process CCCD writes. Only Write Request (0x12) triggers CCCD logic. This means a host that uses Write Command for CCCD writes will not enable notifications. In practice, BlueZ uses Write Request for CCCDs, so this is not a real-world issue.
+Write Command (0x52) now processes CCCD writes (`att_server.py:571-584`), consistent with Write Request (0x12).
 
 #### CCCD Persistence Across Reconnections
 
@@ -165,21 +165,30 @@ This is important because BLE connections may use different addresses across ses
 
 #### CCCD Timing Fix
 
-When `_on_cccd_enabled` fires for the gamepad handle (Report ID 1, 12 bytes) or the SC2 CHR_REPORT handle (Report ID 0x45, 45 bytes), `main_l2cap.py:767-779` immediately sends a zero-notification to pre-fill the UHID queue:
+When `_on_cccd_enabled` fires for the gamepad handle (Report ID 1, 12 bytes) or the SC2 CHR_REPORT handle (Report ID 0x45, 45 bytes), `main_l2cap.py:767-779` spawns a thread that sends 5 staggered zero notifications to pre-fill the UHID queue:
 
 ```python
-# CCCD TIMING FIX: Send initial zero notifications to pre-fill the UHID queue.
-# CGetControllerInfoWorkItem::RunFunc calls SDL_hid_read_timeout 51x at 100ms.
-# If no data is available, it stalls the entire init chain (gate at [esi+0x17c]
-# is never set, blocking haptics/commands). Sending zero reports immediately
-# when the CCCD is enabled ensures data is available on the first read.
+# CCCD TIMING FIX: Send multiple zero notifications to pre-fill the UHID queue.
+# The first notification is consumed by UHID device creation (UHID_CREATE2),
+# not forwarded as UHID_INPUT2. Subsequent notifications reach /dev/hidrawN.
+import threading as _threading
+import time as _time
 if handle == self._report_handle and self.att_server:
-    zero_gamepad = b'\x00' * 12
-    self.att_server.send_notification(self._report_handle, zero_gamepad)
-if handle == self._sc2_hid_handle and self.att_server:
-    zero_sc2 = b'\x00' * 45
-    self.att_server.send_notification(self._sc2_hid_handle, zero_sc2)
+    def _send_gamepad_prefill():
+        for i in range(5):
+            _time.sleep(0.01 * (i + 1))
+            try:
+                self.att_server.send_notification(self._report_handle, b'\x00' * 12)
+            except Exception:
+                pass
+    _threading.Thread(target=_send_gamepad_prefill, daemon=True).start()
 ```
+
+Key details:
+- The first notification is consumed by UHID device creation (`UHID_CREATE2`), not forwarded as `UHID_INPUT2`. Subsequent notifications reach `/dev/hidrawN`.
+- 5 staggered sends (10-50ms delays) ensure data is available on the first `SDL_hid_read_timeout` call.
+- Threading is required to avoid blocking the ATT callback — sending 5 notifications synchronously would hold up the ATT processing pipeline.
+- Critical: `import time as _time` must be available at module level (was a bug when missing, causing a `NameError` at runtime).
 
 Without this fix, Steam-generated haptics (trackpad clicks, UI feedback) don't work because `CGetControllerInfoWorkItem` stalls before the haptic gate is set. In-game rumble still works because `SDL_RumbleJoystick` uses `SDL_hid_write` (host → device) which doesn't depend on the init chain completing.
 
@@ -377,6 +386,12 @@ Steam reads FR 0x00 for response
 - If a read arrives before any write, the queue provides valid zeros (not an error)
 - The `_pending_fr_response` dict is cleared on disconnect (`_on_att_connection`)
 - Feature Report reads for report IDs other than 0x00/0x01 go through `_proxy_feature_read()` (Neptune proxy) if the hidraw fd is open
+
+### Report ID Stripping by hog-ll
+
+BlueZ's hog-ll driver strips the Report ID prefix from ATT Write Requests when forwarding to UHID. This means when the host writes a command to Feature Report 0x00, the ATT write payload received by `_handle_write()` does **not** include the `0x00` Report ID byte. The first byte of the ATT write payload is the command byte itself (e.g., `0x83` for GET_ATTRIBUTES, `0x81` for CLEAR_MAPPINGS), not the Report ID.
+
+Command processing therefore uses `value[0]` (first byte of ATT payload) rather than `value[1]`. The Report ID is implicit from the handle's characteristic reference (`_on_feature_report_write()` resolves the report ID from the handle). This is consistent with standard HID over GATT behavior — the ATT transport layer carries report data without the HID report ID prefix.
 
 ## Socket Setup
 

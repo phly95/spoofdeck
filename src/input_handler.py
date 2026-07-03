@@ -530,7 +530,7 @@ class InputHandler:
                     if dev_path:
                         # BUG: Initial open at line 429 uses O_RDWR, but reopen uses O_RDONLY.
                         # After reopen, write operations (lizard-off, haptics) will fail silently.
-                        self._neptune_fd = os.open(dev_path, os.O_RDONLY | os.O_NONBLOCK)
+                        self._neptune_fd = os.open(dev_path, os.O_RDWR | os.O_NONBLOCK)
                         self.device_path = dev_path
                         print(f"[input] Neptune device reopened: {dev_path}")
                         last_lizard_off = time.monotonic()

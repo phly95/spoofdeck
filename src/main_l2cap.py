@@ -95,7 +95,7 @@ class HoGPeripheral:
         # Intentionally NOT cleared on disconnect.
         self._settings_store = {}  # register_index -> value (for GET_SETTINGS_VALUES)
 
-    def setup(self, local_name="CJohnson Controller 2026"):
+    def setup(self, local_name="Steam Controller 2026"):
         """Set up GATT database and advertisement."""
         # Build the GATT database (no D-Bus dependency)
         self.gatt_db = build_sc2_database(local_name)
@@ -125,7 +125,7 @@ class HoGPeripheral:
         from gatt_db import SC2_HID_SERVICE_UUID
         self.adv = LEAdvertisement(
             self.bus, adv_path, local_name,
-            service_uuids=["1812", SC2_HID_SERVICE_UUID],  # HID + Valve Custom (for SC2 identification)
+            service_uuids=["1812", "180f"],  # HID + Battery (matches real SC2 firmware)
             appearance=0x03C4,
         )
 
@@ -197,9 +197,9 @@ class HoGPeripheral:
     SC2_CMD_GET_SERIAL             = 0xAE
 
     def _setup_feature_report_callbacks(self):
-        """Register callbacks for Feature Reports (Report IDs 0x00, 0x01, 0x85, 0x86, 0x87)."""
+        """Register callbacks for Feature Reports (Report IDs 0x01, 0x02, 0x85, 0x86, 0x87)."""
         self._pending_fr_response = {}  # report_id -> response bytes (for command/response pattern)
-        feature_report_ids = [0x00, 0x01, 0x85, 0x86, 0x87]
+        feature_report_ids = [0x01, 0x02, 0x85, 0x86, 0x87]
         for report_id in feature_report_ids:
             handle = self._find_report_char_handle(report_id, 0x03)  # 0x03 = Feature Report
             if handle:
@@ -229,9 +229,9 @@ class HoGPeripheral:
                 self.gatt_db.write_callbacks[handle] = lambda value, h=handle: self._on_haptic_write(h, value)
 
     def _prepopulate_responses(self):
-        """Pre-populate FR 0x00 responses for GATT discovery reads.
+        """Pre-populate FR 0x01 responses for GATT discovery reads.
         
-        BlueZ's hog-lib.c sends ATT Read Requests for Feature Report 0x00
+        BlueZ's hog-lib.c sends ATT Read Requests for Feature Report 0x01
         during GATT discovery, BEFORE Steam sends any SET_REPORT commands.
         
         We return zeros — Steam's feature report processing will handle the
@@ -239,7 +239,7 @@ class HoGPeripheral:
         data during GATT discovery may confuse the UHID device setup.
         """
         self._fr_response_queue = []
-        print(f"[+] Pre-populated FR 0x00 responses (zeros) for GATT discovery")
+        print(f"[+] Pre-populated FR 0x01 responses (zeros) for GATT discovery")
 
     def _on_haptic_write(self, handle, value):
         """Handle writes to the SC2 output report characteristic.
@@ -324,7 +324,7 @@ class HoGPeripheral:
     def _on_feature_report_read(self, report_id):
         """Called when the host reads a Feature Report from the GATT database.
         
-        For FR 0x00 and 0x01 (SC2 command channels), return the pending
+        For FR 0x01 and 0x02 (SC2 command channels), return the pending
         synthetic response. For GATT discovery reads (before any writes),
         use the pre-populated response queue. For other FRs, proxy to Neptune.
         """
@@ -333,7 +333,7 @@ class HoGPeripheral:
         print(f"[DIAG] [{ts}] 📤 FR 0x{report_id:02x} READ called — pending keys: {list(self._pending_fr_response.keys())}")
 
         # SC2 command channels — return synthetic response
-        if report_id in (0x00, 0x01):
+        if report_id in (0x01, 0x02):
             # First check if there's a pending response from a write command
             response = self._pending_fr_response.pop(report_id, None)
             if response:
@@ -356,7 +356,7 @@ class HoGPeripheral:
     def _on_feature_report_write(self, report_id, value):
         """Called when the host writes a Feature Report to the GATT database.
         
-        For FR 0x00 and 0x01, parse the SC2 command and generate a synthetic
+        For FR 0x01 and 0x02, parse the SC2 command and generate a synthetic
         response. For FR 0x85, handle the mode switch. For others, proxy to Neptune.
         """
         import time
@@ -368,7 +368,7 @@ class HoGPeripheral:
             return
 
         # SC2 command channels — handle synthetically
-        if report_id in (0x00, 0x01):
+        if report_id in (0x01, 0x02):
             self._handle_sc2_command(report_id, value)
             return
 
@@ -412,11 +412,11 @@ class HoGPeripheral:
                 print(f"[DIAG] ❓ Unknown mode value written to Feature Report 0x85: {value.hex()}")
 
     def _handle_sc2_command(self, report_id, value):
-        """Parse and respond to SC2 commands written to Feature Report 0x00 or 0x01.
+        """Parse and respond to SC2 commands written to Feature Report 0x01 or 0x02.
         
         Steam Client communicates with the controller via a command/response protocol:
-          1. Host writes a command to FR 0x00 (e.g., GET_ATTRIBUTES = 0x83)
-          2. Host reads FR 0x00 to retrieve the response
+          1. Host writes a command to FR 0x01 (e.g., GET_ATTRIBUTES = 0x83)
+          2. Host reads FR 0x01 to retrieve the response
          
         We intercept these and return synthetic SC2-appropriate responses.
         """
@@ -426,9 +426,9 @@ class HoGPeripheral:
                        error="TOO_SHORT")
             return
 
-        # Parse command — format is typically: [msg_type, cmd_id, ...]
-        # Data from Steam: 01 83 00 00 ... → msg_type=0x01, cmd=0x83
-        cmd = value[1] if len(value) > 1 else value[0]
+        # Parse command — first byte is the command ID.
+        # hog-ll strips the Report ID prefix, so value[0] = cmd_id.
+        cmd = value[0]
         
         print(f"[DIAG] 🎮 SC2 Command on FR 0x{report_id:02x}: cmd=0x{cmd:02x} data={value[:10].hex()}")
 
@@ -471,16 +471,17 @@ class HoGPeripheral:
             # GET_SERIAL (0xAE) — Response format (23 bytes total):
             #   byte[0] = 0xAE (command echo)
             #   byte[1] = 0x15 (payload length — MUST match write command's byte[1])
-            #   byte[2] = 0x01 (success status)
-            #   bytes[3-22] = serial number (20 bytes, ASCII, null-padded)
-            # Write command from Steam: [0xAE, 0x15, 0x01, 0x00 × 20] (23 bytes)
-            # Read response must also be 23 bytes.
-            # Validation at 0x26b1ac0 (V_strncmp) checks first byte == 'F' (0x46).
-            serial = b'F0000-0000-00000000'  # Must start with 'F' to pass validation
+            #   byte[2] = 0x01 (success status — required by V_strncmp validation path)
+            #   bytes[3-22] = serial number (20 bytes, first byte must be 'F')
+            #
+            # Validation: V_strncmp(serial[0], 'F', count=1) at 0x10c29b3
+            # If serial[0] != 'F' → "Controller Serial# invalid" → identity slot not populated → zombie
+            # The BLE PCB Serial# check (FUN_0122e4c0) logs "PCB Serial# invalid" but is cosmetic
+            serial = b'F0000-0000-00000000'  # Must start with 'F' to pass V_strncmp validation
             response = bytearray([
                 0xAE,       # command echo
                 0x15,       # payload length (0x15 = 21, matches write command byte[1])
-                0x01,       # success status
+                0x01,       # success status (required — 0x00 or 0x04 triggers "Controller Serial# invalid")
             ])
             response += serial[:20].ljust(20, b'\x00')  # pad serial to 20 bytes
             response += bytearray(64 - len(response))  # pad to 64 bytes
@@ -514,7 +515,7 @@ class HoGPeripheral:
             print(f"[DIAG] 🎮 → Acknowledging CLEAR_MAPPINGS")
 
         elif cmd == self.SC2_CMD_SET_ATTRIBUTES:
-            # SET_ATTRIBUTES (0x87) — Write-only command, but Steam may read FR 0x00
+            # SET_ATTRIBUTES (0x87) — Write-only command, but Steam may read FR 0x01
             # to verify the write succeeded. Store a success response.
             register = value[3] if len(value) > 3 else 0
             payload_len = value[2] if len(value) > 2 else 0
@@ -731,6 +732,7 @@ class HoGPeripheral:
 
     def _on_cccd_enabled(self, handle):
         """Called when a CCCD is enabled for an input report."""
+        print(f"[DIAG] CCCD callback: handle=0x{handle:04x} _report_handle=0x{self._report_handle:04x} _sc2_hid_handle=0x{self._sc2_hid_handle:04x} att_server={'yes' if self.att_server else 'no'}")
         # Build a map of known handles for diagnostic output
         handle_names = {}
         if self._report_handle:
@@ -761,19 +763,33 @@ class HoGPeripheral:
                 self.steam_input_mode = True
                 print(f"[DIAG] ⭐ AUTO MODE SWITCH: Host subscribed to {name} → Steam Input Mode")
 
-        # CCCD TIMING FIX: Send initial zero notifications to pre-fill the UHID queue.
-        # CGetControllerInfoWorkItem::RunFunc calls SDL_hid_read_timeout 51x at 100ms.
-        # If no data is available, it stalls the entire init chain (gate at [esi+0x17c]
-        # is never set, blocking haptics/commands). Sending zero reports immediately
-        # when the CCCD is enabled ensures data is available on the first read.
+        # CCCD TIMING FIX: Send multiple zero notifications to pre-fill the UHID queue.
+        # The first notification is consumed by UHID device creation (UHID_CREATE2),
+        # not forwarded to the application. Subsequent notifications become UHID_INPUT2
+        # and reach /dev/hidrawN. CGetControllerInfoWorkItem::RunFunc calls
+        # SDL_hid_read_timeout 51x at 100ms — we must have data ready.
+        import threading as _threading
+        import time as _time
         if handle == self._report_handle and self.att_server:
-            zero_gamepad = b'\x00' * 12
-            self.att_server.send_notification(self._report_handle, zero_gamepad)
-            print(f"[DIAG] Pre-filled UHID queue: 12-byte zero gamepad on handle 0x{self._report_handle:04x}")
+            def _send_gamepad_prefill():
+                for i in range(5):
+                    _time.sleep(0.01 * (i + 1))
+                    try:
+                        self.att_server.send_notification(self._report_handle, b'\x00' * 12)
+                    except Exception:
+                        pass
+                print(f"[DIAG] Pre-filled UHID queue: 5x 12-byte zero gamepad on handle 0x{self._report_handle:04x}")
+            _threading.Thread(target=_send_gamepad_prefill, daemon=True).start()
         if handle == self._sc2_hid_handle and self.att_server:
-            zero_sc2 = b'\x00' * 45
-            self.att_server.send_notification(self._sc2_hid_handle, zero_sc2)
-            print(f"[DIAG] Pre-filled UHID queue: 45-byte zero SC2 on handle 0x{self._sc2_hid_handle:04x}")
+            def _send_sc2_prefill():
+                for i in range(5):
+                    _time.sleep(0.01 * (i + 1))
+                    try:
+                        self.att_server.send_notification(self._sc2_hid_handle, b'\x00' * 45)
+                    except Exception:
+                        pass
+                print(f"[DIAG] Pre-filled UHID queue: 5x 45-byte zero SC2 on handle 0x{self._sc2_hid_handle:04x}")
+            _threading.Thread(target=_send_sc2_prefill, daemon=True).start()
 
     def _on_att_disconnection(self, addr):
         print(f"[+] ATT connection lost from {addr}")
@@ -978,8 +994,8 @@ def main():
     )
     parser.add_argument(
         "--name",
-        default="CJohnson Controller 2026",
-        help="BLE local name (default: CJohnson Controller 2026)",
+        default="Steam Controller 2026",
+        help="BLE local name (default: Steam Controller 2026)",
     )
     parser.add_argument(
         "--device",
