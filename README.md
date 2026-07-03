@@ -8,7 +8,7 @@ Make a Steam Deck present itself as a Steam Controller 2026 (SC2) over Bluetooth
 
 **Working**: Gamepad, trackpads, gyro, back buttons, standard HID input, in-game rumble via `SDL_RumbleJoystick()`. Steam Client recognizes the Deck as an SC2 controller with full Steam Input features.
 
-**Not working**: Steam-generated haptics (trackpad clicks, UI feedback) do NOT produce rumble. The root cause is a CCCD subscription timing gap — notifications don't reach `/dev/hidrawN` during the init window, so `CGetControllerInfoWorkItem::RunFunc` stalls before the gate is set. A fix has been implemented (sending initial zero notifications on CCCD enable) but needs testing.
+**Not working**: Steam-generated haptics (trackpad clicks, UI feedback via 0x8F commands) — architecturally blocked. The haptic scheduler at `0x123e5d0` is never called for BLE controllers (GDB confirmed). `CPulseHapticWorkItem` fires with 0.0ms runtime because the work item short-circuits before entering the scheduler. The block happens upstream in controller setup/dispatch. A real SC2 also doesn't get these haptics over BLE.
 
 **Stable**: Registration completes reliably. No zombie disconnects after clearing stale BlueZ state.
 
@@ -70,16 +70,17 @@ BLE ATT Notification → hog-ll → UHID → /dev/hidrawN
     → Create work item for Steam Input system
 ```
 
-### Command Path (GATED — blocked by init chain stall)
+### Command Path (GATED — blocked upstream for BLE)
 
 ```
-Gate CHECK at 0x0123e5fb: cmp byte [esi+0x17c], 0
-  → If 0: skip entire command pipeline
-  → If 1: proceed with commands
-    → 0x80 (Rumble), 0x81 (Clear Mappings), 0x83 (Get Attributes)
-    → 0x85 (Set Mode), 0xB4 (Protocol Version), 0xEE/0xEF (Feature Messages)
-    → Gyro enable/disable (0x50/0x30) via vtable[0x50]
-    → Mode switch (0x08/0x09) via vtable[0x50]
+CPulseHapticWorkItem fires → 0.0ms runtime → never enters scheduler
+  Block happens BEFORE 0x123e5d0 — upstream in controller setup/dispatch
+  Gate check at 0x123e5fb: cmp byte [esi+0x17c], 0 is UNREACHABLE for BLE
+  Real SC2 also doesn't get 0x8F over BLE — only via USB/Puck dongle
+
+Commands that DO work (via ATT feature reports, not scheduler):
+  0x80 (Rumble), 0x81 (Clear Mappings), 0x83 (Get Attributes)
+  0x85 (Set Mode), 0x87 (Set Settings), 0xae (Get Serial)
 ```
 
 ### Haptic Pipeline (game rumble — working)
@@ -152,14 +153,15 @@ This project produced a detailed map of Steam's controller handling architecture
 | Finding | Address | Description |
 |---------|---------|-------------|
 | Gate mechanism | `[esi+0x17c]` | 7 interactions: SET on error, CLEAR on normal, READ as bitmask, embedded in messages |
-| Gate CHECK | `0x0123e5fb` | `cmp byte [esi+0x17c], 0` — blocks command pipeline, NOT input |
-| Gate CLEAR | `0x0173ce00` | `RecvMsgAppStatus` — only function that clears gate |
+| Haptic scheduler | `0x0123e5d0` | **Never called for BLE controllers** — block is upstream in controller setup |
+| Gate CHECK | `0x0123e5fb` | `cmp byte [esi+0x17c], 0` — unreachable for BLE controllers |
 | Input path | `0x011e0930` | `PollControllers` — bypasses gate entirely, 6975 bytes |
-| Init chain stall | `0x01218840` | `CGetControllerInfoWorkItem::RunFunc` — retries 51×100ms, gets 0 bytes |
+| PID dispatch | `0x0121ba96` | BLE sets `[eax+0xbc]=2`, USB sets `=1`. Post-construction field, not vtable selector |
+| Vtable A | `+0x02e6ce2c` | BLE controller vtable, shared by many objects |
+| Vtable C | `+0x02e6c940` | Scheduler-expected entries at +0x74/+0x84 |
 | Graphics API | `[eax+0x160]` | Writer at `0x019aec80` — values 1=GL, 2=Vulkan, 3=D3D12 |
 | vtable[0x50] | 9 call sites | Fire-and-forget dispatch: SET_SETTINGS, gyro, mode switch |
-| Controller struct | 15+ offsets | 0xbc (transport), 0x160 (graphics), 0x17c (gate), 0x48c (PID) |
-| BLE/USB transport | `controller+0xbc` | 1=USB, 2=BLE. PID mapper at `0x011e9350` |
+| Controller struct | 15+ offsets | 0xbc (post-construction state), 0x10c (transport), 0x17c (gate) |
 
 ### Firmware (ibex_firmware.bin) — Key Findings
 
@@ -217,7 +219,7 @@ This project produced a detailed map of Steam's controller handling architecture
 ├── ghidra-projects/exports/32bit/   # Full decompilation (141K functions, 6.7M lines)
 ├── dbus-config/                     # D-Bus system policy
 ├── deprecated/                      # Broken/unused: main.py, gatt_app.py
-├── patches/                         # check_static_addr.patch
+├── patches/                         # LD_AUDIT libraries, Steam wrapper, kernel patches
 └── scratch/                         # Temporary captures (gitignored)
 ```
 
@@ -275,7 +277,7 @@ grep -n "0x50\]" ~/ghidra-projects/exports/32bit/full_decompiled_32bit.c
 
 ## Known Issues
 
-- **Steam-generated haptics not working** — Root cause: CCCD subscription timing gap. `CGetControllerInfoWorkItem::RunFunc` gets 0 bytes for 51 retries, stalls init chain, gate never set. Fix implemented (zero notifications on CCCD enable) but needs testing.
+- **Steam-generated haptics not working** — Architecturally blocked. The haptic scheduler at `0x123e5d0` is never called for BLE controllers. `CPulseHapticWorkItem` fires with 0.0ms runtime (work item short-circuits before entering scheduler). Block is upstream in controller setup/dispatch. Real SC2 also doesn't get 0x8F haptics over BLE. See `docs/findings-backlog.md`.
 - **Firmware binary truncated** — `ibex_firmware.bin` is 33.4% of nRF52840's 1MB flash. Command descriptors at 0x59b10-0x5a332 are beyond the dump. Full flash dump via J-Link/SWD needed.
 - **PnP ID warning** — BlueZ logs `Error reading PNP_ID: Protocol error` (non-fatal)
 - **KDE pairing dialog** — Host shows dialog during pairing, user must click "yes"
