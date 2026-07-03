@@ -152,43 +152,26 @@ The vtable checks validate the controller object's class hierarchy, which is set
 
 ## Next Steps
 
-### 1. 0xbc Classification Patch (A/B TEST IN PROGRESS)
+### 1. ~~0xbc Classification Patch~~ COMPLETED — Not the vtable selector
 
-**Corrected analysis**: The original `0x101dd73` site was misidentified — it's linked-list head/tail maintenance (`obj->list_head = entry->next`), not transport state. The `+0x1d8` field is a list index in that context.
+**Result**: Patched `0x121ba9c` (BLE class 2 → USB class 1). No `0x8F` haptics. `+0xbc` is a post-construction state field, not the vtable/class constructor selector. The controller object is already constructed with vtable A when `+0xbc` is written.
 
-**The real patch site**: `0x121ba9c` — the immediate byte in the PID dispatch:
-```
-0x121ba96: c7 80 bc 00 00 00 02 00 00 00    mov DWORD PTR [eax+0xbc], 0x2
-                                                ^
-                                          0x121ba9c (byte to patch: 0x02 → 0x01)
-```
+### 2. ~~Vtable Entry Patch~~ COMPLETED — A→C globally crashes Steam
 
-**Why +0xbc is the right target**:
-- PID dispatch at `0x121bf08` checks PID 0x1303 (SC2 BLE) and routes to `0x121ba96` which sets `[eax+0xbc] = 2` (BLE class)
-- PID 0x1302 (SC2 USB wired) routes to `0x121c2d4` which sets `[eax+0xbc] = 1` (USB class)
-- Downstream at `0x2196a73`, `cmp DWORD PTR [esi+0xbc], 0x2` selects the BLE code path; `== 1` selects USB
-- The vtable checks at `0x123e640`/`0x123e654` validate the controller's vtable entries against expected function pointers — these checks FAIL for BLE objects because the vtable is set during construction based on the class
+**Vtable layouts found** (from memory scan):
+- **Vtable A** (`0x02e6ce2c`): BLE controller vtable, most common. vt[0x74]=`0xd3d59920`, vt[0x84]=`0xd3d59930`
+- **Vtable B** (`0x02e6dbe4`): Alternate class. vt[0x74]=`0xd3dc73f0`, vt[0x84]=`0xd3dc3c40`
+- **Vtable C** (`0x02e6c940`): Scheduler-expected entries. vt[0x74]=`0xd3d59c50`, vt[0x84]=`0xd3d59160`
 
-**Root cause confirmed**: The haptic scheduler checks `vtable[0x74]` and `vtable[0x84]` integrity. `FUN_0129ce50` calls through `vtable[0x74]`. Patching gate/transport fields doesn't fix the vtable — the BLE object has a different vtable entirely.
+**Vtable C is NOT in the binary as a static definition** — it exists only at runtime in the r--p (rodata) segment. Its entries are the scheduler's expected function pointers.
 
-**Hypothesis**: If `+0xbc` drives the class/vtable selection during construction, patching it to `1` will make Steam build a USB-style controller with the correct vtable. The gate (`+0x17c`) and transport (`+0x10c`) fields should then be set naturally.
+**Patch attempt**: Modified vtable A entries at `+0x74` and `+0x84` to match vtable C. Patches applied successfully but Steam **segfaulted immediately**.
 
-**Patch**: Single byte `0x02 → 0x01` at `0x121ba9c`. One-byte change, no instruction length issues.
+**Diagnosis**: Vtable A is shared by MANY objects (not just the target controller). Vtable C methods expect a different object layout (field offsets, constructor-initialized state). Globally replacing A→C entries corrupts non-controller objects that also use vtable A.
 
-**Implementation**: `patches/sc2_gate_audit.c` (LD_AUDIT library, clean rewrite — old scheduler/memory-scanner patches disabled for this A/B test).
+**Key finding**: Vtable identity alone is insufficient — constructor/layout/init state matters. The controller object's C++ class layout must match the vtable's method expectations.
 
-**Verification targets** (observation points, NOT patch sites):
-- `0x1690cf4` — `[+0x10c] = 1` setter (should fire naturally)
-- `0x172cfb0` / `0x172fc4a` — `[+0x17c] = 1` gate setters (should fire naturally)
-- `0x123e640` — vtable[0x74] check (should pass without patching)
-- `0x129ce50` — downstream haptic submit (should execute)
-- Deck ATT server logs: 0x8F haptic commands should appear
-
-**Status**: Built, installed. Ready to test. Kill Steam, relaunch (LD_AUDIT loads via wrapper), connect Deck, check logs.
-
-**Files**: `patches/sc2_gate_audit.c`, `patches/steam_audit_wrapper.sh`
-
-### 2. ATT Server Spec Compliance (Not Blocking)
+### 3. ATT Server Spec Compliance (Not Blocking)
 
 These are correctness improvements, not blockers. Fix one at a time, test between each.
 
@@ -213,7 +196,38 @@ These are correctness improvements, not blockers. Fix one at a time, test betwee
 ### 3. Full Firmware Dump
 
 `ibex_firmware.bin` is 33.4% of nRF52840's 1MB flash. Command descriptors at 0x59b10–0x5a332 beyond the dump. J-Link/SWD needed for full flash dump and further firmware RE.
+
+### 4. Remaining Path to Steam Haptics
+
+**What's proven**:
+- LD_AUDIT injection works (SLSsteam-style PATH wrapper, 64-bit stub + 32-bit patcher)
+- Vtable A is the BLE controller vtable, shared by many objects
+- Vtable C has the scheduler-expected function pointers at `+0x74`/`+0x84`
+- Global vtable entry patch A→C crashes (layout mismatch)
+- `+0xbc` classification is post-construction (doesn't affect vtable)
+- Memory scanner finds controller candidates via vtable + gate/transport fields
+
+**What needs to happen**:
+1. **Targeted single-object vtable patch** — Find the live controller object (the one `esi` points to at `0x123e5fb`) and patch ONLY its vtable pointer to vtable C. Requires either:
+   - Hooking the scheduler to capture `esi` at runtime
+   - Better memory scanner filter (gate=1, transport=1, and additional field validation)
+2. **Find the factory/constructor branch** — The code that writes `vtable_A` vs `vtable_C` to new objects. Patch the BLE path to write vtable C instead. This is the "real" fix.
+3. **Accept layout mismatch** — If C methods fundamentally need C-layout objects, then the only fix is constructing C-layout objects from BLE input (very complex).
+
+**Key addresses**:
+- Scheduler vtable check: `0x123e640` (vt[0x74]) and `0x123e654` (vt[0x84])
+- Vtable A definition: `g_code_base + 0x02e6ce2c`
+- Vtable C definition: `g_code_base + 0x02e6c940`
+- PID dispatch: `0x121ba96` (BLE→2), `0x121c2d4` (USB→1)
+- Controller info setter (`+0x10c`): `0x1690cf4`
+- Haptic gate setter (`+0x17c`): `0x172cfb0`, `0x172fc4a`, `0x178a140`
+
+**LD_AUDIT infrastructure**:
+- 64-bit no-op stub: `patches/sc2_gate_audit_64.so` (DO NOT strip LD_AUDIT)
+- 32-bit patcher: `patches/sc2_gate_audit.so.bak` (renamed to prevent auto-load)
+- SLSsteam-style wrapper: `~/.local/share/SLSsteam/path/steam`
+- To re-enable: rename `.so.bak` back to `.so`, kill+relaunch Steam via wrapper
 
 ---
 
-*Last updated: 2026-07-02*
+*Last updated: 2026-07-03*
