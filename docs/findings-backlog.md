@@ -152,33 +152,41 @@ The vtable checks validate the controller object's class hierarchy, which is set
 
 ## Next Steps
 
-### 1. Early Transport State Patch (NEXT SESSION — HIGH PRIORITY)
+### 1. 0xbc Classification Patch (A/B TEST IN PROGRESS)
 
-**New discovery**: Instead of patching the haptic scheduler (5+ layers of defense), patch the **transport state assignment** before controller construction. This makes Steam build the USB-style controller from the start, with correct vtable and all haptic fields.
+**Corrected analysis**: The original `0x101dd73` site was misidentified — it's linked-list head/tail maintenance (`obj->list_head = entry->next`), not transport state. The `+0x1d8` field is a list index in that context.
 
-**Key address**: `0x101dd73` — `mov %edx, 0x1d8(%edi)`
-This instruction writes the transport state to the controller struct's `[edi+0x1d8]` field.
-- BLE: state = 0 (or 3-4 elsewhere) → 16-byte allocation, no haptic gate
-- USB: state = 1 → 0x210-byte allocation, haptic gate opens
-
-**The plan**: Patch `0x101dd73` to always write `0x01` (USB state) instead of whatever `edx` contains.
-
+**The real patch site**: `0x121ba9c` — the immediate byte in the PID dispatch:
 ```
-Original: 89 97 d8 01 00 00    ; mov %edx, 0x1d8(%edi)
-Patched:  c7 87 d8 01 00 00 01 00 00 00  ; movl $0x1, 0x1d8(%edi)
+0x121ba96: c7 80 bc 00 00 00 02 00 00 00    mov DWORD PTR [eax+0xbc], 0x2
+                                                ^
+                                          0x121ba9c (byte to patch: 0x02 → 0x01)
 ```
 
-This is a 10-byte replacement (6 → 10 bytes), which requires careful handling. Simpler alternative: patch at a higher level where the state VALUE is determined.
+**Why +0xbc is the right target**:
+- PID dispatch at `0x121bf08` checks PID 0x1303 (SC2 BLE) and routes to `0x121ba96` which sets `[eax+0xbc] = 2` (BLE class)
+- PID 0x1302 (SC2 USB wired) routes to `0x121c2d4` which sets `[eax+0xbc] = 1` (USB class)
+- Downstream at `0x2196a73`, `cmp DWORD PTR [esi+0xbc], 0x2` selects the BLE code path; `== 1` selects USB
+- The vtable checks at `0x123e640`/`0x123e654` validate the controller's vtable entries against expected function pointers — these checks FAIL for BLE objects because the vtable is set during construction based on the class
 
-**Where ecx table is populated**: Function starts around `0x101d6c0`. The controller data table at `-0x38(%ebp)` contains entries with `[ecx+4]` = state value, `[ecx+8]` = controller struct pointer. Need to find what values are written to `[ecx+4]` and whether we can force USB state there.
+**Root cause confirmed**: The haptic scheduler checks `vtable[0x74]` and `vtable[0x84]` integrity. `FUN_0129ce50` calls through `vtable[0x74]`. Patching gate/transport fields doesn't fix the vtable — the BLE object has a different vtable entirely.
 
-**Why this is the right approach**: 
-- Patching code (scheduler/haptic checks) = whack-a-mole (7+ layers)
-- Patching state = one change, Steam constructs USB object from start
-- USB objects have correct vtable, correct field layout, correct haptic fields
-- No need to find controller struct in memory — the write at `0x101dd73` already has it in `edi`
+**Hypothesis**: If `+0xbc` drives the class/vtable selection during construction, patching it to `1` will make Steam build a USB-style controller with the correct vtable. The gate (`+0x17c`) and transport (`+0x10c`) fields should then be set naturally.
 
-**Files**: `patches/sc2_gate_audit.c` (existing LD_AUDIT library, add this patch)
+**Patch**: Single byte `0x02 → 0x01` at `0x121ba9c`. One-byte change, no instruction length issues.
+
+**Implementation**: `patches/sc2_gate_audit.c` (LD_AUDIT library, clean rewrite — old scheduler/memory-scanner patches disabled for this A/B test).
+
+**Verification targets** (observation points, NOT patch sites):
+- `0x1690cf4` — `[+0x10c] = 1` setter (should fire naturally)
+- `0x172cfb0` / `0x172fc4a` — `[+0x17c] = 1` gate setters (should fire naturally)
+- `0x123e640` — vtable[0x74] check (should pass without patching)
+- `0x129ce50` — downstream haptic submit (should execute)
+- Deck ATT server logs: 0x8F haptic commands should appear
+
+**Status**: Built, installed. Ready to test. Kill Steam, relaunch (LD_AUDIT loads via wrapper), connect Deck, check logs.
+
+**Files**: `patches/sc2_gate_audit.c`, `patches/steam_audit_wrapper.sh`
 
 ### 2. ATT Server Spec Compliance (Not Blocking)
 

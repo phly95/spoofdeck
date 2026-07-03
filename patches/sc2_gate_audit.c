@@ -1,10 +1,11 @@
 /*
- * sc2_gate_audit.c — LD_AUDIT library to spoof BLE controller as USB
+ * sc2_gate_audit.c — LD_AUDIT library: vtable swap experiment A→C
  *
- * Instead of patching 7+ code layers, this finds the controller struct in
- * memory and patches its state fields so Steam treats it as a USB controller:
- *   [esi+0x17c] = 1  (haptic gate open)
- *   [esi+0x10c] = 1  (transport type = USB dongle)
+ * Tests whether swapping the BLE vtable (A) to the scheduler-expected
+ * vtable (C) makes haptic dispatch proceed.
+ *
+ * NO classification patch — clean A/B test.
+ * Does NOT mprotect heap pages to RX — only writes if page is already writable.
  *
  * Build (32-bit):
  *   gcc -m32 -shared -fPIC -o sc2_gate_audit.so sc2_gate_audit.c -lpthread
@@ -23,18 +24,9 @@
 #include <errno.h>
 #include <elf.h>
 
-/* Controller struct field offsets (from scheduler disassembly) */
-#define OFF_GATE     0x17c  /* [esi+0x17c] — haptic gate (0=BLE, 1=USB) */
-#define OFF_TRANSPORT 0x10c /* [esi+0x10c] — transport type (0=BLE, 1=USB) */
-#define OFF_HAPTIC_A 0xa0   /* [esi+0xa0] — haptic active flag */
-
-/* Size bounds for controller struct (from code analysis) */
-#define STRUCT_MIN_SIZE 0x400
-#define STRUCT_MAX_SIZE 0x1000
-
 static uintptr_t g_code_base = 0;
 static uintptr_t g_code_end = 0;
-static volatile int g_patched = 0;
+static volatile int g_vtable_swapped = 0;
 
 static void strip_from_ld_audit(void) {
     unsetenv("LD_AUDIT");
@@ -52,107 +44,139 @@ static int is_steam_process(void) {
     return (strcmp(comm, "steam") == 0);
 }
 
-/* Check if a pointer looks like it could be a vtable into steamclient.so */
-static int is_valid_vtable(uintptr_t ptr) {
-    return (ptr >= g_code_base && ptr < g_code_end);
+static int is_code_ptr(uintptr_t ptr) {
+    return ptr >= g_code_base && ptr < g_code_end;
 }
 
-/* Check if memory at addr looks like a controller struct candidate.
- * Requirements:
- *   - [addr+0] is a valid vtable pointer into steamclient.so code
- *   - [addr+0x17c] = 0 (BLE gate, not set)
- *   - [addr+0x10c] = 0 (BLE transport)
- *   - Struct is a reasonable size (no invalid page accesses)
+/*
+ * Vtable addresses computed from ELF layout:
+ *   Data segment: file_offset=0x2e4dc80, vaddr=0x02e4fc80
+ *   Vtable A (BLE):     file_offset=0x2e6ae2c → vaddr=0x02e6ce2c
+ *   Vtable C (expected): file_offset=0x2e6a940 → vaddr=0x02e6c940
+ *
+ * Runtime address = g_code_base + vaddr
  */
-static int is_controller_struct(uintptr_t addr) {
-    uintptr_t vtable;
-    uint8_t gate, transport;
+#define VTABLE_A_VADDR 0x02e6ce2c
+#define VTABLE_C_VADDR 0x02e6c940
 
-    /* Read vtable pointer */
-    memcpy(&vtable, (void *)addr, sizeof(vtable));
-    if (!is_valid_vtable(vtable))
-        return 0;
+/* Controller struct field offsets */
+#define OFF_VTABLE    0x00
+#define OFF_GATE      0x17c
+#define OFF_TRANSPORT 0x10c
 
-    /* Read gate and transport fields */
-    gate = *(volatile uint8_t *)(addr + OFF_GATE);
-    transport = *(volatile uint8_t *)(addr + OFF_TRANSPORT);
-
-    /* For BLE controller, both should be 0 */
-    if (gate != 0 || transport != 0)
-        return 0;
-
-    return 1;
-}
-
-/* Scan a memory region for controller struct candidates */
-static void scan_region(uintptr_t start, uintptr_t end) {
-    long page_size = sysconf(_SC_PAGESIZE);
-
-    for (uintptr_t addr = start; addr < end; addr += page_size) {
-        /* Quick check: first 4 bytes must be a valid vtable pointer */
-        uintptr_t maybe_vtable;
-        memcpy(&maybe_vtable, (void *)addr, sizeof(maybe_vtable));
-        if (!is_valid_vtable(maybe_vtable))
-            continue;
-
-        /* Found a candidate — verify it */
-        if (!is_controller_struct(addr))
-            continue;
-
-        /* Found the controller struct! Patch the state fields */
-        /* Make the page writable */
-        uintptr_t page_start = addr & ~(page_size - 1);
-        if (mprotect((void *)page_start, page_size * 2, PROT_READ | PROT_WRITE) != 0)
-            continue;
-
-        /* Patch gate and transport to USB values */
-        *(volatile uint8_t *)(addr + OFF_GATE) = 1;
-        *(volatile uint8_t *)(addr + OFF_TRANSPORT) = 1;
-
-        /* Restore page protection */
-        mprotect((void *)page_start, page_size * 2, PROT_READ);
-
-        g_patched = 1;
-    }
-}
-
-/* Background scanner thread */
-static void *scanner_thread(void *arg) {
+static void *patch_thread(void *arg) {
     (void)arg;
 
-    /* Wait for steamclient.so to be loaded */
-    for (int i = 0; i < 200 && g_code_base == 0; i++)
-        usleep(50000);
+    /* Wait for steamclient.so to load */
+    for (int i = 0; i < 400 && g_code_base == 0; i++)
+        usleep(150000);
+    if (g_code_base == 0) {
+        fprintf(stderr, "[sc2_audit] TIMEOUT: steamclient.so not loaded\n");
+        return NULL;
+    }
 
-    if (g_code_base == 0) return NULL;
+    uintptr_t vt_a = g_code_base + VTABLE_A_VADDR;
+    uintptr_t vt_c = g_code_base + VTABLE_C_VADDR;
 
-    /* Keep scanning until we find and patch the controller struct */
-    int attempts = 0;
-    while (!g_patched && attempts < 600) {
-        /* Read /proc/self/maps to find writable regions */
-        FILE *maps = fopen("/proc/self/maps", "r");
-        if (!maps) { usleep(100000); attempts++; continue; }
+    fprintf(stderr, "[sc2_audit] base=%p vt_a=%p vt_c=%p\n",
+            (void *)g_code_base, (void *)vt_a, (void *)vt_c);
 
-        char line[512];
+    /* Verify vtable C exists and has reasonable entries */
+    uint32_t c74 = *(volatile uint32_t *)(vt_c + 0x74);
+    uint32_t c84 = *(volatile uint32_t *)(vt_c + 0x84);
+    uint32_t c00 = *(volatile uint32_t *)(vt_c + 0x00);
+    fprintf(stderr, "[sc2_audit] vt_c[0]=0x%08x vt_c[0x74]=0x%08x vt_c[0x84]=0x%08x\n",
+            c00, c74, c84);
+
+    if (!is_code_ptr(c00) || !is_code_ptr(c74) || !is_code_ptr(c84)) {
+        fprintf(stderr, "[sc2_audit] vt_c entries don't look like code pointers — aborting\n");
+        return NULL;
+    }
+
+    fprintf(stderr, "[sc2_audit] vt_c looks valid, scanning for controllers...\n");
+
+    /* Wait for controllers to be created */
+    sleep(3);
+
+    /* Scan heap for controller objects with vtable A */
+    FILE *maps = fopen("/proc/self/maps", "r");
+    if (!maps) return NULL;
+
+    long page_size = sysconf(_SC_PAGESIZE);
+    char line[512];
+    int found = 0;
+
+    while (fgets(line, sizeof(line), maps)) {
+        unsigned long start, end;
+        char perms[5];
+        if (sscanf(line, "%lx-%lx %4s", &start, &end, perms) != 3) continue;
+        if (perms[1] != 'w') continue;
+
+        for (uintptr_t addr = start; addr < end - 0x200; addr += 4) {
+            uintptr_t vt;
+            memcpy(&vt, (void *)addr, sizeof(vt));
+            if (vt != vt_a) continue;
+
+            /* Quick controller filter */
+            uint8_t gate = *(volatile uint8_t *)(addr + OFF_GATE);
+            uint8_t transport = *(volatile uint8_t *)(addr + OFF_TRANSPORT);
+            if (gate > 5 || transport > 5) continue;
+
+            fprintf(stderr, "[sc2_audit] Candidate at %p (gate=%d trans=%d)\n",
+                    (void *)addr, gate, transport);
+
+            if (g_vtable_swapped == 0) {
+                /* Swap vtable A → C (page is already rw-p, no mprotect needed) */
+                *(uintptr_t *)addr = vt_c;
+
+                uintptr_t verify;
+                memcpy(&verify, (void *)addr, sizeof(verify));
+                if (verify == vt_c) {
+                    fprintf(stderr, "[sc2_audit] VTABLE SWAPPED A→C at %p\n", (void *)addr);
+                    g_vtable_swapped = 1;
+                } else {
+                    fprintf(stderr, "[sc2_audit] SWAP VERIFY FAILED\n");
+                }
+            }
+            found++;
+        }
+    }
+    fclose(maps);
+
+    if (found == 0)
+        fprintf(stderr, "[sc2_audit] No controllers with vtable A found\n");
+    else
+        fprintf(stderr, "[sc2_audit] Found %d controller(s), swapped %d\n", found, g_vtable_swapped);
+
+    /* Retry if no swap happened yet */
+    for (int retry = 0; retry < 10 && g_vtable_swapped == 0; retry++) {
+        fprintf(stderr, "[sc2_audit] Retry %d...\n", retry + 1);
+        sleep(2);
+        /* Re-read maps in case new regions appeared */
+        maps = fopen("/proc/self/maps", "r");
+        if (!maps) continue;
         while (fgets(line, sizeof(line), maps)) {
             unsigned long start, end;
             char perms[5];
-            if (sscanf(line, "%lx-%lx %4s", &start, &end, perms) != 3)
-                continue;
-
-            /* Only scan writable regions (heap, data) */
+            if (sscanf(line, "%lx-%lx %4s", &start, &end, perms) != 3) continue;
             if (perms[1] != 'w') continue;
-
-            /* Skip the code section itself */
-            if (start >= g_code_base && start < g_code_end) continue;
-
-            scan_region(start, end);
-            if (g_patched) break;
+            for (uintptr_t addr = start; addr < end - 0x200 && g_vtable_swapped == 0; addr += 4) {
+                uintptr_t vt;
+                memcpy(&vt, (void *)addr, sizeof(vt));
+                if (vt != vt_a) continue;
+                uint8_t gate = *(volatile uint8_t *)(addr + OFF_GATE);
+                uint8_t transport = *(volatile uint8_t *)(addr + OFF_TRANSPORT);
+                if (gate > 5 || transport > 5) continue;
+                *(uintptr_t *)addr = vt_c;
+                uintptr_t verify;
+                memcpy(&verify, (void *)addr, sizeof(verify));
+                if (verify == vt_c) {
+                    fprintf(stderr, "[sc2_audit] VTABLE SWAPPED A→C at %p (retry)\n", (void *)addr);
+                    g_vtable_swapped = 1;
+                }
+            }
         }
         fclose(maps);
-
-        if (!g_patched) usleep(200000); /* 200ms between scans */
-        attempts++;
     }
 
     return NULL;
@@ -168,14 +192,12 @@ void la_preinit(uintptr_t *cookie) {
 }
 
 unsigned int la_objopen(struct link_map *map, Lmid_t lmid, uintptr_t *cookie) {
-    if (g_patched) return 0;
+    if (g_code_base != 0) return 0;
 
     const char *name = map->l_name ? map->l_name : "";
     if (strstr(name, "steamclient.so")) {
-        /* Record the code section range */
         g_code_base = map->l_addr;
 
-        /* Find the end of the code section from ELF headers */
         Elf32_Ehdr *ehdr = (Elf32_Ehdr *)map->l_addr;
         Elf32_Phdr *phdr = (Elf32_Phdr *)((uintptr_t)ehdr + ehdr->e_phoff);
         uintptr_t max_end = 0;
@@ -187,9 +209,10 @@ unsigned int la_objopen(struct link_map *map, Lmid_t lmid, uintptr_t *cookie) {
         }
         g_code_end = max_end;
 
-        /* Start the scanner thread */
+        fprintf(stderr, "[sc2_audit] steamclient.so at %p\n", (void *)g_code_base);
+
         pthread_t tid;
-        pthread_create(&tid, NULL, scanner_thread, NULL);
+        pthread_create(&tid, NULL, patch_thread, NULL);
         pthread_detach(tid);
     }
     return 0;
