@@ -66,9 +66,9 @@ The fix: a raw L2CAP socket on CID 4 bound directly to `C2:12:34:56:78:9A` with 
 
 ## What Needs to Happen Next
 
-1. **ATT Server Spec Compliance** (one at a time, test each): Read Blob error code (0x01→0x07), MTU caps on Read/Notify, PDU length validation, ATT permission checking, diagnostic handle labels.
-2. **Full flash dump** — `ibex_firmware.bin` is 33.4% of nRF52840's 1MB flash. Command descriptors at 0x59b10–0x5a332 beyond the dump. J-Link/SWD needed.
-3. **USB gadget mode** (if Steam haptics are required) — Deck presents as USB HID over USB-C cable. Host sees USB device, all haptics work natively. Requires USB gadget driver on Deck side.
+1. **Early Transport State Patch** — Patch `0x101dd73` (`mov %edx, 0x1d8(%edi)`) to force USB state (1) instead of BLE state (0). This is the **transport classification** that happens before controller construction. Patching this one instruction makes Steam build the USB-style controller from the start, with correct vtable and all haptic fields. See `docs/findings-backlog.md` "Early Transport State Patch" section for full details. This is the **highest priority** — one code patch replaces all 5+ layers of scheduler haptic patching.
+2. **ATT Server Spec Compliance** (one at a time, test each): Read Blob error code (0x01→0x07), MTU caps on Read/Notify, PDU length validation, ATT permission checking, diagnostic handle labels.
+3. **Full flash dump** — `ibex_firmware.bin` is 33.4% of nRF52840's 1MB flash. Command descriptors at 0x59b10–0x5a332 beyond the dump. J-Link/SWD needed.
 
 ## Files to Read Before Making Changes
 

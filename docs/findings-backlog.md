@@ -152,17 +152,47 @@ The vtable checks validate the controller object's class hierarchy, which is set
 
 ## Next Steps
 
-### 1. ~~LD_PRELOAD/LD_AUDIT Patch for 0x8F Gate~~ — INVESTIGATED, NOT PRACTICAL
+### 1. Early Transport State Patch (NEXT SESSION — HIGH PRIORITY)
 
-Explored in detail. Built LD_AUDIT library (`patches/sc2_gate_audit.c`) following SLSsteam's pattern. Confirmed patches applied in memory (verified via `/proc/PID/mem`). Found 5-layer haptic block:
-- Layers 1-4: Patchable (gate, param_4, transport type × 2)
-- Layer 5: Vtable integrity checks — NOT practical to patch (each check reveals deeper validation; controller object state is fundamentally different for BLE)
+**New discovery**: Instead of patching the haptic scheduler (5+ layers of defense), patch the **transport state assignment** before controller construction. This makes Steam build the USB-style controller from the start, with correct vtable and all haptic fields.
 
-**Conclusion**: Steam-generated haptics (0x8F) cannot be practically enabled over BLE via binary patching. The controller object's internal state is set by Steam's BLE initialization code, which doesn't configure the haptic pipeline fields. This matches the real SC2 behavior — BLE controllers don't get Steam haptics, only USB ones do via the Puck dongle.
+**Key address**: `0x101dd73` — `mov %edx, 0x1d8(%edi)`
+This instruction writes the transport state to the controller struct's `[edi+0x1d8]` field.
+- BLE: state = 0 (or 3-4 elsewhere) → 16-byte allocation, no haptic gate
+- USB: state = 1 → 0x210-byte allocation, haptic gate opens
 
-**Alternative**: USB gadget mode (Deck presents as USB HID over USB-C cable) would give full haptics since the host sees a USB device. Or accept the limitation — game rumble via SDL_RumbleJoystick already works.
+**The plan**: Patch `0x101dd73` to always write `0x01` (USB state) instead of whatever `edx` contains.
+
+```
+Original: 89 97 d8 01 00 00    ; mov %edx, 0x1d8(%edi)
+Patched:  c7 87 d8 01 00 00 01 00 00 00  ; movl $0x1, 0x1d8(%edi)
+```
+
+This is a 10-byte replacement (6 → 10 bytes), which requires careful handling. Simpler alternative: patch at a higher level where the state VALUE is determined.
+
+**Where ecx table is populated**: Function starts around `0x101d6c0`. The controller data table at `-0x38(%ebp)` contains entries with `[ecx+4]` = state value, `[ecx+8]` = controller struct pointer. Need to find what values are written to `[ecx+4]` and whether we can force USB state there.
+
+**Why this is the right approach**: 
+- Patching code (scheduler/haptic checks) = whack-a-mole (7+ layers)
+- Patching state = one change, Steam constructs USB object from start
+- USB objects have correct vtable, correct field layout, correct haptic fields
+- No need to find controller struct in memory — the write at `0x101dd73` already has it in `edi`
+
+**Files**: `patches/sc2_gate_audit.c` (existing LD_AUDIT library, add this patch)
 
 ### 2. ATT Server Spec Compliance (Not Blocking)
+
+These are correctness improvements, not blockers. Fix one at a time, test between each.
+
+1. Read Blob error code (0x01 → 0x07)
+2. MTU caps on Read/Notify PDUs
+3. PDU length validation
+4. ATT permission checking
+5. Diagnostic handle labels
+
+### 3. Full Firmware Dump
+
+`ibex_firmware.bin` is 33.4% of nRF52840's 1MB flash. Command descriptors at 0x59b10–0x5a332 beyond the dump. J-Link/SWD needed for full flash dump and further firmware RE.
 
 These are correctness improvements, not blockers. Fix one at a time, test between each.
 
