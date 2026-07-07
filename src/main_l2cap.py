@@ -45,7 +45,7 @@ def _proto_log(event, **kwargs):
 from gatt_db import build_sc2_database
 from att_server import AttServer
 from adv import LEAdvertisement, setup_adapter_properties
-from input_handler import InputHandler
+from input_handler import InputHandler, SyntheticInputHandler
 from agent import register_agent, unregister_agent, AGENT_PATH
 from bluez import (
     get_adapter_path,
@@ -888,12 +888,22 @@ class HoGPeripheral:
     def _on_adv_error(self, error):
         print(f"[-] Advertisement registration failed: {error}")
 
-    def start_input_capture(self, device_path=None):
-        """Start capturing controller inputs from the Deck."""
-        self.input_handler = InputHandler(
-            on_report=self._on_input_report,
-            device_path=device_path,
-        )
+    def start_input_capture(self, device_path=None, no_deck=False):
+        """Start capturing controller inputs from the Deck.
+        
+        Args:
+            device_path: Optional explicit device path. Auto-detect if not specified.
+            no_deck: If True, use SyntheticInputHandler (no physical Deck needed).
+        """
+        if no_deck:
+            self.input_handler = SyntheticInputHandler(
+                on_report=self._on_input_report,
+            )
+        else:
+            self.input_handler = InputHandler(
+                on_report=self._on_input_report,
+                device_path=device_path,
+            )
         self.input_handler.start()
 
     def _on_input_report(self, report_dict):
@@ -1045,6 +1055,12 @@ def main():
         action="store_true",
         help="Print adapter info and exit",
     )
+    parser.add_argument(
+        "--no-deck",
+        action="store_true",
+        help="No-deck mode: run without a physical Deck controller. "
+             "Sends synthetic idle gamepad reports at ~10Hz so Steam sees the controller.",
+    )
 
     args = parser.parse_args()
 
@@ -1077,7 +1093,7 @@ def main():
     peripheral.setup(args.name)
 
     # Start input capture
-    peripheral.start_input_capture(args.device)
+    peripheral.start_input_capture(args.device, no_deck=args.no_deck)
 
     # Run main loop (advertising + ATT server via GLib idle)
     peripheral.run()

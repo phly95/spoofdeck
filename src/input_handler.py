@@ -109,6 +109,59 @@ def _send_lizard_off(fd):
             pass
 
 
+class SyntheticInputHandler:
+    """Generates idle gamepad reports at ~10Hz for no-deck mode.
+
+    Sends zero/center-position 12-byte gamepad and 45-byte SC2 custom reports
+    so Steam sees an active controller without any physical Deck attached.
+    """
+
+    def __init__(self, on_report=None):
+        self.on_report = on_report
+        self._thread = None
+        self._running = False
+        self.seq_num = 0
+        self.start_time = time.monotonic()
+        self._is_neptune = False  # Compatibility with HoGPeripheral
+
+    def start(self):
+        if self._running:
+            return
+        self._running = True
+        self._thread = threading.Thread(target=self._synthetic_loop, daemon=True)
+        self._thread.start()
+        print("[+] Synthetic input handler started (no-deck mode)")
+
+    def stop(self):
+        self._running = False
+        if self._thread:
+            self._thread.join(timeout=2)
+
+    def _synthetic_loop(self):
+        """Send idle reports at ~10Hz (every 100ms)."""
+        while self._running:
+            self.seq_num = (self.seq_num + 1) & 0xFF
+            timestamp_us = int((time.monotonic() - self.start_time) * 1000000) & 0xFFFFFFFF
+
+            # 12-byte gamepad: all zeros (center sticks, no buttons, no triggers)
+            gamepad_12b = b'\x00' * 12
+
+            # 45-byte SC2 custom report: zero everything except seq_num and timestamp
+            report45 = bytearray(45)
+            report45[0] = self.seq_num
+            struct.pack_into("<I", report45, 29, timestamp_us)
+
+            if self.on_report:
+                self.on_report({
+                    'gamepad_12b': gamepad_12b,
+                    'gamepad_45b': bytes(report45),
+                    'mouse_4b': None,
+                    'kbd_8b': None,
+                })
+
+            time.sleep(0.1)  # 10Hz
+
+
 class InputHandler:
     def __init__(self, on_report=None, device_path=None):
         self.on_report = on_report
