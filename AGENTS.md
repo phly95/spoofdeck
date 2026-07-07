@@ -12,7 +12,7 @@ The Steam Deck runs a raw L2CAP ATT server on CID 4 bound to static random addre
 
 `input_handler.py` reads 64-byte HID reports from the Neptune controller at `/dev/hidraw3` (USB interface 2), maps them to SC2 12-byte gamepad and 45-byte custom reports, and sends them as ATT notifications. Lizard mode is disabled by periodically re-sending a `0x81` ClearDigitalMappings command via `os.write()`. The host's BlueZ hog-ll driver creates `/dev/hidrawN` and `/dev/input/eventN` from the notifications.
 
-See `README.md` for the full architecture diagram. See `src/main_l2cap.py` for the entrypoint.
+See `README.md` for the full architecture diagram. See `src/main_l2cap.py` for the BLE entrypoint, `src/main_virtual_usb.py` for the virtual USB entrypoint.
 
 **Deprecated** — do not use: `deprecated/main.py` (BlueZ GATT, broken), `deprecated/gatt_app.py` (D-Bus GATT objects, not needed).
 
@@ -254,7 +254,9 @@ Ghidra analysis of SC2 BLE firmware (`ibex_firmware.bin`, 2027 functions, 73K li
 │   ├── serial-format-analysis.md    # Serial validation analysis
 │   └── archive/                     # Completed research (roadmap, BlueZ debug, etc.)
 ├── src/
-│   ├── main_l2cap.py                # ENTRYPOINT — raw L2CAP ATT server
+│   ├── main_l2cap.py                # ENTRYPOINT (BLE) — raw L2CAP ATT server
+│   ├── main_virtual_usb.py          # ENTRYPOINT (USB) — vhci_hcd virtual USB device
+│   ├── main_uhid.py                 # UHID virtual device (simpler, limited Steam support)
 │   ├── att_server.py                # Raw L2CAP ATT server (CID 4)
 │   ├── gatt_db.py                   # GATT database (87 attributes, 6 services)
 │   ├── input_handler.py             # Neptune HID → SC2 input mapping

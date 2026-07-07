@@ -1,12 +1,14 @@
-# SpoofDeck: Steam Deck → Steam Controller 2026 BLE Spoof
+# SpoofDeck: Steam Deck → Steam Controller 2026 (BLE + Virtual USB)
 
-Make a Steam Deck present itself as a Steam Controller 2026 (SC2) over Bluetooth Low Energy, enabling Steam Input support (trackpads, gyro, back buttons) without USB wired mode.
+Make a Steam Deck present itself as a Steam Controller 2026 (SC2) over Bluetooth Low Energy or as a virtual USB device, enabling Steam Input support (trackpads, gyro, back buttons) without physical USB wired mode.
 
 [MIT License](LICENSE)
 
 ## Current Status
 
-**Working**: Gamepad, trackpads, gyro, back buttons, standard HID input, in-game rumble via `SDL_RumbleJoystick()`. Steam Client recognizes the Deck as an SC2 controller with full Steam Input features.
+**BLE mode working**: Gamepad, trackpads, gyro, back buttons, standard HID input, in-game rumble via `SDL_RumbleJoystick()`. Steam Client recognizes the Deck as an SC2 controller with full Steam Input features.
+
+**Virtual USB mode working**: `main_virtual_usb.py` creates a full virtual USB composite device (mouse, keyboard, controller) via `vhci_hcd` + USB/IP protocol on any Linux host. Steam Client sees it as a real USB Steam Controller (VID 0x28DE, PID 0x1205) with correct `bInterfaceNumber`. Handles SC2 command protocol (GET_ATTRIBUTES, GET_SERIAL, etc.). Run with `sudo python3 src/main_virtual_usb.py`.
 
 **Not working**: Steam-generated haptics (trackpad clicks, UI feedback via 0x8F commands) — architecturally blocked. The haptic scheduler at `0x123e5d0` is never called for BLE controllers (GDB confirmed). `CPulseHapticWorkItem` fires with 0.0ms runtime because the work item short-circuits before entering the scheduler. The block happens upstream in controller setup/dispatch. A real SC2 also doesn't get these haptics over BLE.
 
@@ -104,6 +106,10 @@ The fix: use a raw L2CAP socket on CID 4 bound directly to the static random add
 
 ## Quick Start
 
+### Option A: BLE Mode (Deck → Host PC)
+
+Requires a Steam Deck and a host PC with Bluetooth.
+
 ### Prerequisites
 
 - Steam Deck with Bluetooth enabled
@@ -117,7 +123,17 @@ The fix: use a raw L2CAP socket on CID 4 bound directly to the static random add
 3. Deploy with `scripts/deploy.sh`
 4. Connect from host: `bluetoothctl connect C2:12:34:56:78:9A`
 
-### On the Host
+### Option B: Virtual USB Mode (any Linux host, no Deck needed)
+
+No Bluetooth or Steam Deck required. Creates a virtual USB SC2 on any Linux machine with Steam installed.
+
+```bash
+sudo python3 src/main_virtual_usb.py --name "Steam Controller 2026"
+# Check: lsusb | grep 28de
+# Check: ls -la /dev/hidraw*
+```
+
+### Option C: BLE Mode — On the Host
 
 ```bash
 # Connect (NOT pair — pair tries BR/EDR which tears down LE)
@@ -143,6 +159,7 @@ evtest /dev/input/eventN
 - **In-game rumble**: Full haptic pipeline confirmed working — games calling `SDL_RumbleJoystick()` produce rumble on Neptune motors via PackedRumbleReport format
 - **Feature Reports in HID Report Map**: Feature Reports 0x00, 0x01, 0x85 declared in HID descriptor for Steam's SC2 HIDAPI driver
 - **CCCD timing fix**: Sends initial zero notifications when CCCDs are enabled to pre-fill UHID queue
+- **Virtual USB mode** (`main_virtual_usb.py`): Full virtual USB composite device via `vhci_hcd` + USB/IP protocol. 3 HID interfaces with correct `bInterfaceNumber`. SC2 command handler responds to all Steam queries. Steam Client registers it as a Steam Controller — verified via `controller.txt` showing `BYieldingCompleteSteamControllerRegistration`
 
 ## Reverse Engineering Findings
 
@@ -198,7 +215,9 @@ This project produced a detailed map of Steam's controller handling architecture
 │   ├── serial-format-analysis.md    # Serial validation analysis
 │   └── archive/                     # Completed research (roadmap, BlueZ debug, etc.)
 ├── src/
-│   ├── main_l2cap.py                # ENTRYPOINT — raw L2CAP ATT server
+│   ├── main_l2cap.py                # ENTRYPOINT (BLE) — raw L2CAP ATT server
+│   ├── main_virtual_usb.py          # ENTRYPOINT (USB) — vhci_hcd virtual USB device
+│   ├── main_uhid.py                 # UHID virtual device (simpler, limited Steam support)
 │   ├── att_server.py                # Raw L2CAP ATT server (CID 4)
 │   ├── gatt_db.py                   # GATT database (87 attributes, 6 services)
 │   ├── input_handler.py             # Neptune HID → SC2 input mapping
